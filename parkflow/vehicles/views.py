@@ -7,6 +7,7 @@ list and history pages read the local reporting replica.
 """
 from django.shortcuts import render, get_object_or_404
 from django.http import JsonResponse
+from django.contrib import messages
 from django.views.decorators.http import require_http_methods
 import json
 from urllib.parse import quote
@@ -123,34 +124,28 @@ def vehicle_register(request):
         mirror.mirror_vehicle(
             body['data']['registration_number'], vehicle_type
         )
+        # The page reloads after registering; show the confirmation then.
+        messages.success(request, body.get('message') or 'Vehicle registered')
 
     return JsonResponse(body, status=status)
 
 
 def vehicle_history(request, registration_number):
-    """Get parking history for a vehicle (local reporting replica)."""
+    """Parking history page for a vehicle (local reporting replica)."""
     normalized = _normalize(registration_number)
     vehicle = get_object_or_404(Vehicle, registration_number=normalized)
 
-    sessions = vehicle.parking_sessions.all().order_by('-entry_time')
+    sessions = vehicle.parking_sessions.select_related('slot').all().order_by('-entry_time')
 
-    data = []
-    for session in sessions:
-        data.append({
-            'session_id': session.id,
-            'slot': session.slot.slot_number,
-            'entry_time': session.entry_time.isoformat(),
-            'exit_time': session.exit_time.isoformat() if session.exit_time else None,
-            'duration_minutes': session.duration_minutes,
-            'amount_due': float(session.amount_due),
-            'status': session.status,
-        })
-
-    return JsonResponse({
-        'success': True,
-        'data': {
-            'vehicle': str(vehicle),
-            'sessions': data,
-            'total_sessions': len(data),
-        }
-    })
+    context = {
+        'vehicle': vehicle,
+        'sessions': sessions,
+        'total_sessions': sessions.count(),
+        'completed_sessions': sessions.filter(
+            status=ParkingSession.Status.COMPLETED
+        ).count(),
+        'active_sessions': sessions.filter(
+            status=ParkingSession.Status.ACTIVE
+        ).count(),
+    }
+    return render(request, 'vehicles/history.html', context)

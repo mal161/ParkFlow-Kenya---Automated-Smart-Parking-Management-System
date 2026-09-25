@@ -10,6 +10,7 @@ import json
 
 from django.shortcuts import render
 from django.http import JsonResponse
+from django.contrib import messages
 from django.views.decorators.http import require_http_methods
 
 from parking.models import ParkingSlot, ParkingSession
@@ -93,6 +94,11 @@ def vehicle_entry(request):
     if body.get('success') and body.get('data', {}).get('session_id'):
         mirror.mirror_entry(registration_number, vehicle_type, body['data'])
 
+    if body.get('success'):
+        # Queued for the next full page render (the browser reloads
+        # after a successful entry instead of parsing JSON feedback).
+        messages.success(request, body.get('message') or 'Vehicle entry recorded')
+
     return JsonResponse(body, status=status)
 
 
@@ -135,6 +141,12 @@ def vehicle_exit(request):
 
     if body.get('success') and body.get('data', {}).get('session_id'):
         mirror.mirror_exit(body['data'])
+
+    if body.get('success') and not body.get('data', {}).get('payment_required'):
+        # Free parking: the browser reloads straight away, so the
+        # confirmation is delivered as a Django message. Paid exits
+        # confirm later, after the payment message.
+        messages.success(request, body.get('message') or 'Vehicle exit recorded')
 
     return JsonResponse(body, status=status)
 

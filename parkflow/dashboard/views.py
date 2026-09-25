@@ -16,13 +16,13 @@ from payments.models import Payment
 from common import mirror
 
 
-def operator_dashboard(request):
-    """Main operator dashboard view."""
-    return render(request, 'dashboard/operator.html')
+def _dashboard_payload():
+    """
+    Build the structured dashboard dataset.
 
-
-def dashboard_data(request):
-    """API endpoint for real-time dashboard data."""
+    Shared by the server-rendered operator page (structured context)
+    and the JSON API endpoint (serialised), so both always agree.
+    """
     mirror.sync_slots()
     mirror.sync_sessions()
 
@@ -44,7 +44,7 @@ def dashboard_data(request):
             'session_id': session.id,
             'vehicle': str(session.vehicle),
             'slot': session.slot.slot_number,
-            'entry_time': session.entry_time.isoformat(),
+            'entry_time': session.entry_time,
             'duration_minutes': session.calculate_duration(),
         })
 
@@ -73,7 +73,7 @@ def dashboard_data(request):
     )
     revenue_today = payments_today.aggregate(Sum('amount'))['amount__sum'] or 0
 
-    data = {
+    return {
         'slots': {
             'total': total_slots,
             'available': available_slots,
@@ -90,6 +90,28 @@ def dashboard_data(request):
         },
         'timestamp': timezone.now().isoformat(),
     }
+
+
+def operator_dashboard(request):
+    """Main operator dashboard view - rendered server-side from structured data."""
+    data = _dashboard_payload()
+    context = {
+        'metrics': data['slots'],
+        'slot_grid': data['slot_grid'],
+        'active_sessions': data['active_sessions'],
+        'stats_today': data['stats_today'],
+        'generated_at': timezone.localtime(),
+    }
+    return render(request, 'dashboard/operator.html', context)
+
+
+def dashboard_data(request):
+    """API endpoint for real-time dashboard data."""
+    data = _dashboard_payload()
+    data['active_sessions'] = [
+        dict(session, entry_time=session['entry_time'].isoformat())
+        for session in data['active_sessions']
+    ]
 
     return JsonResponse({'success': True, 'data': data})
 

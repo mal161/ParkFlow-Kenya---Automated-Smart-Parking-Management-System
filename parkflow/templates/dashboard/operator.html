@@ -12,27 +12,27 @@
 <div class="metric-grid" id="metric-grid">
     <div class="metric-card">
         <div class="metric-label">Total Slots</div>
-        <div class="metric-value" id="total-slots">-</div>
+        <div class="metric-value">{{ metrics.total }}</div>
     </div>
     <div class="metric-card">
         <div class="metric-label">Available</div>
-        <div class="metric-value success" id="available-slots">-</div>
+        <div class="metric-value success">{{ metrics.available }}</div>
     </div>
     <div class="metric-card">
         <div class="metric-label">Occupied</div>
-        <div class="metric-value error" id="occupied-slots">-</div>
+        <div class="metric-value error">{{ metrics.occupied }}</div>
     </div>
     <div class="metric-card">
         <div class="metric-label">Occupancy Rate</div>
-        <div class="metric-value warning" id="occupancy-rate">-</div>
+        <div class="metric-value warning">{{ metrics.occupancy_rate }}%</div>
     </div>
     <div class="metric-card">
         <div class="metric-label">Active Sessions</div>
-        <div class="metric-value primary" id="active-sessions">-</div>
+        <div class="metric-value primary">{{ active_sessions|length }}</div>
     </div>
     <div class="metric-card">
         <div class="metric-label">Today's Revenue</div>
-        <div class="metric-value success" id="revenue-today">-</div>
+        <div class="metric-value success">KSh {{ stats_today.revenue|floatformat:2 }}</div>
     </div>
 </div>
 
@@ -42,11 +42,21 @@
     <div class="card">
         <div class="card-header">
             <h3>Parking Slots</h3>
-            <button class="btn btn-sm btn-secondary" onclick="refreshSlots()">Refresh</button>
+            <button class="btn btn-sm btn-secondary" onclick="location.reload()">Refresh</button>
         </div>
         <div class="card-body">
             <div class="slot-grid" id="slot-grid">
-                <!-- Slots loaded via JS -->
+                {% for location, location_slots in slot_grid.items %}
+                <div style="grid-column: 1 / -1; font-weight: 600; color: var(--color-text-secondary); margin-top: var(--spacing-md); margin-bottom: var(--spacing-sm);">{{ location }}</div>
+                {% for slot in location_slots %}
+                <div class="slot-card {{ slot.status|lower }}" title="{{ slot.slot_number }} - {{ slot.status }}">
+                    <span class="slot-number">{{ slot.slot_number }}</span>
+                    <span class="slot-status">{{ slot.status }}</span>
+                </div>
+                {% endfor %}
+                {% empty %}
+                <div class="text-center text-muted" style="grid-column: 1 / -1;">No slots configured</div>
+                {% endfor %}
             </div>
         </div>
     </div>
@@ -55,9 +65,10 @@
     <div class="card">
         <div class="card-header">
             <h3>Active Sessions</h3>
-            <button class="btn btn-sm btn-secondary" onclick="refreshSessions()">Refresh</button>
+            <button class="btn btn-sm btn-secondary" onclick="location.reload()">Refresh</button>
         </div>
         <div class="card-body">
+            {% if active_sessions %}
             <div class="table-container">
                 <table id="sessions-table">
                     <thead>
@@ -69,13 +80,22 @@
                         </tr>
                     </thead>
                     <tbody id="sessions-body">
-                        <!-- Sessions loaded via JS -->
+                        {% for session in active_sessions %}
+                        <tr>
+                            <td>{{ session.vehicle }}</td>
+                            <td><span class="badge badge-occupied">{{ session.slot }}</span></td>
+                            <td>{{ session.entry_time|date:"M d, Y H:i" }}</td>
+                            <td>{{ session.duration_minutes }} min</td>
+                        </tr>
+                        {% endfor %}
                     </tbody>
                 </table>
             </div>
-            <div id="no-sessions" class="text-center text-muted" style="display: none; padding: var(--spacing-lg);">
+            {% else %}
+            <div id="no-sessions" class="text-center text-muted" style="padding: var(--spacing-lg);">
                 No active sessions
             </div>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -218,89 +238,6 @@
 let currentExitSession = null;
 let currentExitFee = 0;
 
-async function loadDashboardData() {
-    try {
-        const response = await ParkFlow.request('/dashboard/data/');
-        if (response.success) {
-            updateMetrics(response.data);
-            updateSlotGrid(response.data.slot_grid || {});
-            updateSessions(response.data.active_sessions);
-        }
-    } catch (error) {
-        ParkFlow.showAlert('Failed to load dashboard data', 'error');
-    }
-}
-
-function updateMetrics(data) {
-    document.getElementById('total-slots').textContent = data.slots.total;
-    document.getElementById('available-slots').textContent = data.slots.available;
-    document.getElementById('occupied-slots').textContent = data.slots.occupied;
-    document.getElementById('occupancy-rate').textContent = data.slots.occupancy_rate + '%';
-    document.getElementById('active-sessions').textContent = data.active_sessions.length;
-    document.getElementById('revenue-today').textContent = ParkFlow.formatCurrency(data.stats_today.revenue);
-}
-
-function updateSlotGrid(slots) {
-    const grid = document.getElementById('slot-grid');
-    let html = '';
-
-    for (const [location, locationSlots] of Object.entries(slots)) {
-        html += `<div style="grid-column: 1 / -1; font-weight: 600; color: var(--color-text-secondary); margin-top: var(--spacing-md); margin-bottom: var(--spacing-sm);">${location}</div>`;
-        for (const slot of locationSlots) {
-            const statusClass = slot.status.toLowerCase();
-            html += `
-                <div class="slot-card ${statusClass}" title="${slot.slot_number} - ${slot.status}">
-                    <span class="slot-number">${slot.slot_number}</span>
-                    <span class="slot-status">${slot.status}</span>
-                </div>
-            `;
-        }
-    }
-
-    grid.innerHTML = html || '<div class="text-center text-muted" style="grid-column: 1 / -1;">No slots configured</div>';
-}
-
-function updateSessions(sessions) {
-    const tbody = document.getElementById('sessions-body');
-    const noSessions = document.getElementById('no-sessions');
-
-    if (sessions.length === 0) {
-        tbody.innerHTML = '';
-        noSessions.style.display = 'block';
-        return;
-    }
-
-    noSessions.style.display = 'none';
-    tbody.innerHTML = sessions.map(session => `
-        <tr>
-            <td>${session.vehicle}</td>
-            <td><span class="badge badge-occupied">${session.slot}</span></td>
-            <td>${ParkFlow.formatDateTime(session.entry_time)}</td>
-            <td>${ParkFlow.formatDuration(session.duration_minutes)}</td>
-        </tr>
-    `).join('');
-}
-
-function refreshSlots() {
-    ParkFlow.request('/dashboard/slots/grid/')
-        .then(response => {
-            if (response.success) {
-                updateSlotGrid(response.data.locations);
-            }
-        })
-        .catch(() => ParkFlow.showAlert('Failed to refresh slots', 'error'));
-}
-
-function refreshSessions() {
-    ParkFlow.request('/parking/sessions/active/')
-        .then(response => {
-            if (response.success) {
-                updateSessions(response.data.sessions);
-            }
-        })
-        .catch(() => ParkFlow.showAlert('Failed to refresh sessions', 'error'));
-}
-
 // Vehicle Entry Modal
 function showVehicleEntryModal() {
     document.getElementById('entry-form').reset();
@@ -326,9 +263,9 @@ document.getElementById('entry-form').addEventListener('submit', async (e) => {
         });
 
         if (response.success) {
-            ParkFlow.showAlert(response.message, 'success');
+            // Success feedback arrives as a Django message after the reload.
             closeModal('entry-modal');
-            loadDashboardData();
+            location.reload();
         } else {
             ParkFlow.showAlert(response.message, 'error');
         }
@@ -391,9 +328,8 @@ async function calculateExitFee() {
 
         // 3. Free parking: exit is already authorized, nothing to pay
         if (!exit.payment_required) {
-            ParkFlow.showAlert(exitResponse.message, 'success');
             closeModal('exit-modal');
-            loadDashboardData();
+            location.reload();
             return;
         }
 
@@ -437,20 +373,25 @@ async function processPayment() {
             return;
         }
 
-        ParkFlow.showAlert('Payment processed. Exit authorized.', 'success');
+        // Success feedback arrives as a Django message after the reload.
         closeModal('exit-modal');
-        loadDashboardData();
+        location.reload();
 
     } catch (error) {
         ParkFlow.showAlert(error.message, 'error');
     }
 }
 
-// Initialize
+// Initialize: auto-refresh the page every 30 seconds (skipped while a
+// modal is open so an operator mid-entry never loses their input).
 document.addEventListener('DOMContentLoaded', () => {
-    loadDashboardData();
-    // Auto-refresh every 30 seconds
-    setInterval(loadDashboardData, 30000);
+    setInterval(() => {
+        const modalOpen = Array.from(document.querySelectorAll('.modal'))
+            .some(modal => modal.style.display !== 'none');
+        if (!modalOpen) {
+            location.reload();
+        }
+    }, 30000);
 });
 </script>
 {% endblock %}

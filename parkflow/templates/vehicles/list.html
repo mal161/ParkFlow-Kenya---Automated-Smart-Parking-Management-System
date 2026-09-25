@@ -109,7 +109,7 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
         });
 
         if (response.success) {
-            ParkFlow.showAlert(response.message, 'success');
+            // Success feedback arrives as a Django message after the reload.
             closeModal('register-modal');
             location.reload();
         } else {

@@ -1,0 +1,76 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ vehicle.registration_number }} History - ParkFlow Kenya{% endblock %}
+
+{% block content %}
+<div class="dashboard-header d-flex justify-between align-center">
+    <div>
+        <h2>{{ vehicle.registration_number }} History</h2>
+        <p class="text-muted">{{ vehicle.vehicle_type }} &middot; Registered {{ vehicle.created_at|date:"M d, Y" }}</p>
+    </div>
+    <a href="{% url 'vehicles:list' %}" class="btn btn-secondary">Back to Vehicles</a>
+</div>
+
+<!-- Summary Cards -->
+<div class="metric-grid">
+    <div class="metric-card">
+        <div class="metric-label">Total Sessions</div>
+        <div class="metric-value">{{ total_sessions }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Completed</div>
+        <div class="metric-value success">{{ completed_sessions }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Active Now</div>
+        <div class="metric-value primary">{{ active_sessions }}</div>
+    </div>
+</div>
+
+<!-- Session History -->
+<div class="card">
+    <div class="card-header">
+        <h3>Session History</h3>
+    </div>
+    <div class="card-body">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Session</th>
+                        <th>Slot</th>
+                        <th>Entry</th>
+                        <th>Exit</th>
+                        <th>Duration</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for session in sessions %}
+                    <tr>
+                        <td>{{ session.id }}</td>
+                        <td><span class="badge badge-occupied">{{ session.slot.slot_number }}</span></td>
+                        <td>{{ session.entry_time|date:"M d, Y H:i" }}</td>
+                        <td>
+                            {% if session.exit_time %}
+                            {{ session.exit_time|date:"M d, Y H:i" }}
+                            {% else %}
+                            Active
+                            {% endif %}
+                        </td>
+                        <td>{{ session.calculate_duration|floatformat:0 }} min</td>
+                        <td>KSh {{ session.amount_due|floatformat:2 }}</td>
+                        <td><span class="badge badge-{{ session.status|lower }}">{{ session.status }}</span></td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center text-muted" style="padding: var(--spacing-xl);">No parking sessions yet</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

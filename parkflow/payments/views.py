@@ -8,6 +8,7 @@ and history pages read the local replica.
 """
 from django.shortcuts import render, get_object_or_404
 from django.http import JsonResponse
+from django.contrib import messages
 from django.views.decorators.http import require_http_methods
 import json
 
@@ -114,6 +115,8 @@ def process_payment(request):
 
     if body.get('success'):
         mirror.mirror_payment(session_id, body.get('data', {}))
+        # The browser reloads after paying; show the confirmation then.
+        messages.success(request, body.get('message') or 'Payment processed')
 
     return JsonResponse(body, status=status)
 
