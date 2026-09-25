@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+
+# Environment variables
+.env
+
+# Django
+db.sqlite3
+staticfiles/
+
+# IDE
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
