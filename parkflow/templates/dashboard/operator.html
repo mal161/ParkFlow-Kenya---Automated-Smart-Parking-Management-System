@@ -1,0 +1,456 @@
+{% extends 'base.html' %}
+
+{% block title %}Dashboard - ParkFlow Kenya{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h2>Operator Dashboard</h2>
+    <p class="text-muted">Real-time parking facility overview</p>
+</div>
+
+<!-- Metric Cards -->
+<div class="metric-grid" id="metric-grid">
+    <div class="metric-card">
+        <div class="metric-label">Total Slots</div>
+        <div class="metric-value" id="total-slots">-</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Available</div>
+        <div class="metric-value success" id="available-slots">-</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Occupied</div>
+        <div class="metric-value error" id="occupied-slots">-</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Occupancy Rate</div>
+        <div class="metric-value warning" id="occupancy-rate">-</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Active Sessions</div>
+        <div class="metric-value primary" id="active-sessions">-</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Today's Revenue</div>
+        <div class="metric-value success" id="revenue-today">-</div>
+    </div>
+</div>
+
+<!-- Main Content Grid -->
+<div style="display: grid; grid-template-columns: 1fr 350px; gap: var(--spacing-lg);">
+    <!-- Slot Grid -->
+    <div class="card">
+        <div class="card-header">
+            <h3>Parking Slots</h3>
+            <button class="btn btn-sm btn-secondary" onclick="refreshSlots()">Refresh</button>
+        </div>
+        <div class="card-body">
+            <div class="slot-grid" id="slot-grid">
+                <!-- Slots loaded via JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Sessions -->
+    <div class="card">
+        <div class="card-header">
+            <h3>Active Sessions</h3>
+            <button class="btn btn-sm btn-secondary" onclick="refreshSessions()">Refresh</button>
+        </div>
+        <div class="card-body">
+            <div class="table-container">
+                <table id="sessions-table">
+                    <thead>
+                        <tr>
+                            <th>Vehicle</th>
+                            <th>Slot</th>
+                            <th>Entry Time</th>
+                            <th>Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sessions-body">
+                        <!-- Sessions loaded via JS -->
+                    </tbody>
+                </table>
+            </div>
+            <div id="no-sessions" class="text-center text-muted" style="display: none; padding: var(--spacing-lg);">
+                No active sessions
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="card" style="margin-top: var(--spacing-lg);">
+    <div class="card-header">
+        <h3>Quick Actions</h3>
+    </div>
+    <div class="card-body">
+        <div style="display: flex; gap: var(--spacing-md); flex-wrap: wrap;">
+            <button class="btn btn-primary" onclick="showVehicleEntryModal()">Vehicle Entry</button>
+            <button class="btn btn-secondary" onclick="showVehicleExitModal()">Vehicle Exit</button>
+            <a href="{% url 'reports:dashboard' %}" class="btn btn-secondary">View Reports</a>
+        </div>
+    </div>
+</div>
+
+<!-- Vehicle Entry Modal -->
+<div id="entry-modal" class="modal" style="display: none;">
+    <div class="modal-overlay" onclick="closeModal('entry-modal')"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Vehicle Entry</h3>
+            <button class="modal-close" onclick="closeModal('entry-modal')">&times;</button>
+        </div>
+        <form id="entry-form">
+            <div class="form-group">
+                <label for="entry-reg">Registration Number</label>
+                <input type="text" id="entry-reg" name="registration_number" placeholder="KAA 123A" required>
+                <div class="help-text">Format: KAA 123A</div>
+            </div>
+            <div class="form-group">
+                <label for="entry-type">Vehicle Type</label>
+                <select id="entry-type" name="vehicle_type" required>
+                    <option value="CAR">Car</option>
+                    <option value="MOTORCYCLE">Motorcycle</option>
+                    <option value="TRUCK">Truck</option>
+                    <option value="BUS">Bus</option>
+                    <option value="OTHER">Other</option>
+                </select>
+            </div>
+            <div style="display: flex; gap: var(--spacing-sm); justify-content: flex-end; margin-top: var(--spacing-lg);">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('entry-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Register & Allocate Slot</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Vehicle Exit Modal -->
+<div id="exit-modal" class="modal" style="display: none;">
+    <div class="modal-overlay" onclick="closeModal('exit-modal')"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Vehicle Exit</h3>
+            <button class="modal-close" onclick="closeModal('exit-modal')">&times;</button>
+        </div>
+        <div id="exit-form-content">
+            <div class="form-group">
+                <label for="exit-reg">Registration Number</label>
+                <input type="text" id="exit-reg" name="registration_number" placeholder="KAA 123A" required>
+                <div class="help-text">Enter registration to calculate fee</div>
+            </div>
+            <div style="display: flex; gap: var(--spacing-sm); justify-content: flex-end; margin-top: var(--spacing-lg);">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('exit-modal')">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="calculateExitFee()">Calculate Fee</button>
+            </div>
+        </div>
+        <div id="exit-fee-display" style="display: none; margin-top: var(--spacing-lg); padding: var(--spacing-md); background: var(--color-surface); border-radius: var(--border-radius);">
+            <h4>Fee Summary</h4>
+            <div id="fee-details"></div>
+            <div style="display: flex; gap: var(--spacing-sm); justify-content: flex-end; margin-top: var(--spacing-md);">
+                <button type="button" class="btn btn-secondary" onclick="resetExitForm()">Back</button>
+                <button type="button" class="btn btn-primary" onclick="processPayment()">Process Payment & Exit</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+}
+
+.modal-content {
+    position: relative;
+    background: var(--color-background);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: var(--spacing-lg);
+    width: 90%;
+    max-width: 400px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-lg);
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: var(--font-size-xl);
+    cursor: pointer;
+    color: var(--color-text-secondary);
+}
+
+.modal-close:hover {
+    color: var(--color-text);
+}
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentExitSession = null;
+let currentExitFee = 0;
+
+async function loadDashboardData() {
+    try {
+        const response = await ParkFlow.request('/dashboard/data/');
+        if (response.success) {
+            updateMetrics(response.data);
+            updateSlotGrid(response.data.slot_grid || {});
+            updateSessions(response.data.active_sessions);
+        }
+    } catch (error) {
+        ParkFlow.showAlert('Failed to load dashboard data', 'error');
+    }
+}
+
+function updateMetrics(data) {
+    document.getElementById('total-slots').textContent = data.slots.total;
+    document.getElementById('available-slots').textContent = data.slots.available;
+    document.getElementById('occupied-slots').textContent = data.slots.occupied;
+    document.getElementById('occupancy-rate').textContent = data.slots.occupancy_rate + '%';
+    document.getElementById('active-sessions').textContent = data.active_sessions.length;
+    document.getElementById('revenue-today').textContent = ParkFlow.formatCurrency(data.stats_today.revenue);
+}
+
+function updateSlotGrid(slots) {
+    const grid = document.getElementById('slot-grid');
+    let html = '';
+
+    for (const [location, locationSlots] of Object.entries(slots)) {
+        html += `<div style="grid-column: 1 / -1; font-weight: 600; color: var(--color-text-secondary); margin-top: var(--spacing-md); margin-bottom: var(--spacing-sm);">${location}</div>`;
+        for (const slot of locationSlots) {
+            const statusClass = slot.status.toLowerCase();
+            html += `
+                <div class="slot-card ${statusClass}" title="${slot.slot_number} - ${slot.status}">
+                    <span class="slot-number">${slot.slot_number}</span>
+                    <span class="slot-status">${slot.status}</span>
+                </div>
+            `;
+        }
+    }
+
+    grid.innerHTML = html || '<div class="text-center text-muted" style="grid-column: 1 / -1;">No slots configured</div>';
+}
+
+function updateSessions(sessions) {
+    const tbody = document.getElementById('sessions-body');
+    const noSessions = document.getElementById('no-sessions');
+
+    if (sessions.length === 0) {
+        tbody.innerHTML = '';
+        noSessions.style.display = 'block';
+        return;
+    }
+
+    noSessions.style.display = 'none';
+    tbody.innerHTML = sessions.map(session => `
+        <tr>
+            <td>${session.vehicle}</td>
+            <td><span class="badge badge-occupied">${session.slot}</span></td>
+            <td>${ParkFlow.formatDateTime(session.entry_time)}</td>
+            <td>${ParkFlow.formatDuration(session.duration_minutes)}</td>
+        </tr>
+    `).join('');
+}
+
+function refreshSlots() {
+    ParkFlow.request('/dashboard/slots/grid/')
+        .then(response => {
+            if (response.success) {
+                updateSlotGrid(response.data.locations);
+            }
+        })
+        .catch(() => ParkFlow.showAlert('Failed to refresh slots', 'error'));
+}
+
+function refreshSessions() {
+    ParkFlow.request('/parking/sessions/active/')
+        .then(response => {
+            if (response.success) {
+                updateSessions(response.data.sessions);
+            }
+        })
+        .catch(() => ParkFlow.showAlert('Failed to refresh sessions', 'error'));
+}
+
+// Vehicle Entry Modal
+function showVehicleEntryModal() {
+    document.getElementById('entry-form').reset();
+    document.getElementById('entry-modal').style.display = 'flex';
+}
+
+function closeModal(modalId) {
+    document.getElementById(modalId).style.display = 'none';
+}
+
+document.getElementById('entry-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const data = Object.fromEntries(formData);
+
+    // Normalize registration
+    data.registration_number = ParkFlow.normalizeRegistration(data.registration_number);
+
+    try {
+        const response = await ParkFlow.request('/parking/entry/', {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+
+        if (response.success) {
+            ParkFlow.showAlert(response.message, 'success');
+            closeModal('entry-modal');
+            loadDashboardData();
+        } else {
+            ParkFlow.showAlert(response.message, 'error');
+        }
+    } catch (error) {
+        ParkFlow.showAlert(error.message, 'error');
+    }
+});
+
+// Vehicle Exit Modal
+function showVehicleExitModal() {
+    document.getElementById('exit-form-content').style.display = 'block';
+    document.getElementById('exit-fee-display').style.display = 'none';
+    document.getElementById('exit-reg').value = '';
+    currentExitSession = null;
+    document.getElementById('exit-modal').style.display = 'flex';
+}
+
+function resetExitForm() {
+    showVehicleExitModal();
+}
+
+async function calculateExitFee() {
+    const reg = ParkFlow.normalizeRegistration(document.getElementById('exit-reg').value);
+    if (!reg) {
+        ParkFlow.showAlert('Please enter a registration number', 'warning');
+        return;
+    }
+
+    try {
+        // 1. Find the active session for this vehicle
+        const response = await ParkFlow.request(`/vehicles/lookup/?registration_number=${encodeURIComponent(reg)}`);
+
+        if (!response.success) {
+            ParkFlow.showAlert(response.message, 'error');
+            return;
+        }
+
+        if (!response.data.has_active_session) {
+            ParkFlow.showAlert('No active parking session for this vehicle', 'error');
+            return;
+        }
+
+        const session = response.data.active_session;
+        const vehicleType = response.data.vehicle_type;
+
+        // 2. Record the exit (engine calculates duration and fee)
+        const exitResponse = await ParkFlow.request('/parking/exit/', {
+            method: 'POST',
+            body: JSON.stringify({ registration_number: reg }),
+        });
+
+        if (!exitResponse.success) {
+            ParkFlow.showAlert(exitResponse.message, 'error');
+            return;
+        }
+
+        const exit = exitResponse.data;
+        currentExitSession = session;
+        currentExitFee = exit.fee_ksh;
+
+        // 3. Free parking: exit is already authorized, nothing to pay
+        if (!exit.payment_required) {
+            ParkFlow.showAlert(exitResponse.message, 'success');
+            closeModal('exit-modal');
+            loadDashboardData();
+            return;
+        }
+
+        // 4. Show the fee breakdown before cash payment
+        document.getElementById('fee-details').innerHTML = `
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--spacing-sm); margin-bottom: var(--spacing-md);">
+                <div><strong>Vehicle:</strong> ${reg} (${vehicleType})</div>
+                <div><strong>Slot:</strong> ${session.slot}</div>
+                <div><strong>Entry Time:</strong> ${ParkFlow.formatDateTime(session.entry_time)}</div>
+                <div><strong>Duration:</strong> ${ParkFlow.formatDuration(exit.duration_minutes)}</div>
+                <div><strong>Vehicle Type:</strong> ${vehicleType}</div>
+                <div><strong>Fee:</strong> ${ParkFlow.formatCurrency(exit.fee_ksh)}</div>
+            </div>
+        `;
+
+        document.getElementById('exit-form-content').style.display = 'none';
+        document.getElementById('exit-fee-display').style.display = 'block';
+
+    } catch (error) {
+        ParkFlow.showAlert(error.message, 'error');
+    }
+}
+
+async function processPayment() {
+    if (!currentExitSession) return;
+
+    try {
+        // The fee was calculated when the exit was recorded; the engine
+        // re-validates the amount server-side (never trust the client).
+        const paymentResponse = await ParkFlow.request('/payments/process/', {
+            method: 'POST',
+            body: JSON.stringify({
+                session_id: currentExitSession.session_id,
+                amount: currentExitFee,
+                payment_method: 'CASH',
+            }),
+        });
+
+        if (!paymentResponse.success) {
+            ParkFlow.showAlert(paymentResponse.message, 'error');
+            return;
+        }
+
+        ParkFlow.showAlert('Payment processed. Exit authorized.', 'success');
+        closeModal('exit-modal');
+        loadDashboardData();
+
+    } catch (error) {
+        ParkFlow.showAlert(error.message, 'error');
+    }
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    loadDashboardData();
+    // Auto-refresh every 30 seconds
+    setInterval(loadDashboardData, 30000);
+});
+</script>
+{% endblock %}

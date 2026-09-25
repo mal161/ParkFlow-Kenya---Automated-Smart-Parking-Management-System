@@ -1,0 +1,56 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}ParkFlow Kenya{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'css/base.css' %}">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <header class="site-header">
+        <div class="header-content">
+            <div class="brand">
+                <div class="brand-text">
+                    <h1>ParkFlow Kenya</h1>
+                    <p class="tagline">Automated Parking Management System</p>
+                </div>
+            </div>
+            <nav class="main-nav">
+                <ul>
+                    <li><a href="{% url 'dashboard:operator' %}" class="{% if request.resolver_match.url_name == 'operator' %}active{% endif %}">Dashboard</a></li>
+                    <li><a href="{% url 'parking:dashboard' %}" class="{% if request.resolver_match.app_name == 'parking' %}active{% endif %}">Parking</a></li>
+                    <li><a href="{% url 'vehicles:list' %}" class="{% if request.resolver_match.app_name == 'vehicles' %}active{% endif %}">Vehicles</a></li>
+                    <li><a href="{% url 'payments:list' %}" class="{% if request.resolver_match.app_name == 'payments' %}active{% endif %}">Payments</a></li>
+                    <li><a href="{% url 'reports:dashboard' %}" class="{% if request.resolver_match.app_name == 'reports' %}active{% endif %}">Reports</a></li>
+                    <li><a href="/admin/" class="{% if '/admin' in request.path %}active{% endif %}">Admin</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <main class="main-content">
+        {% if messages %}
+            <div class="messages">
+                {% for message in messages %}
+                    <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="site-footer">
+        <p>&copy; 2026 ParkFlow Kenya. All rights reserved.</p>
+    </footer>
+
+    {# Renders the csrf hidden input so Django sets the csrftoken cookie; #}
+    {# base.js sends it back as the X-CSRFToken header on fetch() POSTs. #}
+    <form hidden>{% csrf_token %}</form>
+
+    <script src="{% static 'js/base.js' %}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

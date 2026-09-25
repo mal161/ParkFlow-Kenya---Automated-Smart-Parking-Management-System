@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+
+{% block title %}Parking Management - ParkFlow Kenya{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h2>Parking Management</h2>
+    <p class="text-muted">View and manage parking slots and sessions</p>
+</div>
+
+<!-- Slot Overview -->
+<div class="metric-grid">
+    <div class="metric-card">
+        <div class="metric-label">Total Slots</div>
+        <div class="metric-value">{{ total_slots }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Available</div>
+        <div class="metric-value success">{{ available_count }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Occupied</div>
+        <div class="metric-value error">{{ occupied_count }}</div>
+    </div>
+</div>
+
+<!-- Slot Grid -->
+<div class="card">
+    <div class="card-header d-flex justify-between align-center">
+        <h3>Parking Slots</h3>
+        <a href="/admin/parking/parkingslot/add/" class="btn btn-primary btn-sm">Add Slot</a>
+    </div>
+    <div class="card-body">
+        <div class="slot-grid">
+            {% for slot in slots %}
+            <div class="slot-card {{ slot.status|lower }}" title="{{ slot.slot_number }} - {{ slot.location|default:'General' }}">
+                <span class="slot-number">{{ slot.slot_number }}</span>
+                <span class="slot-status">{{ slot.status }}</span>
+            </div>
+            {% empty %}
+            <div class="text-center text-muted" style="grid-column: 1 / -1; padding: var(--spacing-xl);">
+                No parking slots configured. <a href="/admin/parking/parkingslot/add/">Add slots in Admin</a>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- Active Sessions -->
+<div class="card" style="margin-top: var(--spacing-lg);">
+    <div class="card-header">
+        <h3>Active Parking Sessions</h3>
+    </div>
+    <div class="card-body">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Session ID</th>
+                        <th>Vehicle</th>
+                        <th>Slot</th>
+                        <th>Entry Time</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for session in active_sessions %}
+                    <tr>
+                        <td>{{ session.id }}</td>
+                        <td>{{ session.vehicle }}</td>
+                        <td><span class="badge badge-occupied">{{ session.slot.slot_number }}</span></td>
+                        <td>{{ session.entry_time|date:"M d, H:i" }}</td>
+                        <td>{{ session.calculate_duration|floatformat:0 }} min</td>
+                        <td><span class="badge badge-active">{{ session.status }}</span></td>
+                        <td>
+                            <a href="{% url 'payments:calculate_fee' %}?session_id={{ session.id }}" class="btn btn-sm btn-secondary">Calculate Fee</a>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center text-muted" style="padding: var(--spacing-xl);">No active sessions</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

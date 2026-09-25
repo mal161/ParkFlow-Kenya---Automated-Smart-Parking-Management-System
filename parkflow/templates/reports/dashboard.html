@@ -1,0 +1,240 @@
+{% extends 'base.html' %}
+
+{% block title %}Reports - ParkFlow Kenya{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h2>Reports & Analytics</h2>
+    <p class="text-muted">Operational reports and business intelligence</p>
+</div>
+
+<!-- Report Type Selector -->
+<div class="card" style="margin-bottom: var(--spacing-lg);">
+    <div class="card-header">
+        <h3>Generate Report</h3>
+    </div>
+    <div class="card-body">
+        <div style="display: flex; gap: var(--spacing-md); flex-wrap: wrap; align-items: flex-end;">
+            <div class="form-group" style="flex: 1; min-width: 200px;">
+                <label for="report-type">Report Type</label>
+                <select id="report-type" class="form-control">
+                    <option value="daily">Daily Summary</option>
+                    <option value="revenue">Revenue Report</option>
+                    <option value="occupancy">Occupancy Report</option>
+                    <option value="vehicle-history">Vehicle History</option>
+                    <option value="payment-summary">Payment Summary</option>
+                </select>
+            </div>
+            <div class="form-group" style="flex: 1; min-width: 150px;" id="days-field">
+                <label for="report-days">Period (Days)</label>
+                <input type="number" id="report-days" value="7" min="1" max="365">
+            </div>
+            <div class="form-group" style="flex: 1; min-width: 200px;" id="vehicle-field" style="display: none;">
+                <label for="report-vehicle">Registration Number</label>
+                <input type="text" id="report-vehicle" placeholder="KAA 123A">
+            </div>
+            <button class="btn btn-primary" onclick="generateReport()">Generate</button>
+            <button class="btn btn-secondary" onclick="downloadReport()">Download CSV</button>
+        </div>
+    </div>
+</div>
+
+<!-- Report Results -->
+<div class="card" id="report-results" style="display: none;">
+    <div class="card-header d-flex justify-between align-center">
+        <h3 id="report-title">Report</h3>
+        <span class="text-muted" id="report-timestamp"></span>
+    </div>
+    <div class="card-body" id="report-content">
+        <!-- Report content loaded here -->
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentReportData = null;
+
+function generateReport() {
+    const type = document.getElementById('report-type').value;
+    const days = document.getElementById('report-days').value;
+    const vehicle = document.getElementById('report-vehicle').value;
+
+    // The select value 'daily' maps to the 'daily-summary' endpoint.
+    const endpoint = type === 'daily' ? 'daily-summary' : type;
+    let url = `/reports/${endpoint}/`;
+    const params = new URLSearchParams();
+
+    if (days) params.append('days', days);
+    if (vehicle) params.append('registration_number', vehicle);
+
+    if (params.toString()) url += '?' + params.toString();
+
+    // Show/hide fields based on report type
+    document.getElementById('days-field').style.display = ['revenue', 'occupancy', 'payment-summary'].includes(type) ? 'block' : 'none';
+    document.getElementById('vehicle-field').style.display = type === 'vehicle-history' ? 'block' : 'none';
+
+    fetch(url)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                currentReportData = data.data;
+                displayReport(type, data.data);
+            } else {
+                ParkFlow.showAlert(data.message, 'error');
+            }
+        })
+        .catch(error => {
+            ParkFlow.showAlert(error.message, 'error');
+        });
+}
+
+function displayReport(type, data) {
+    const titleMap = {
+        'daily': 'Daily Summary',
+        'revenue': 'Revenue Report',
+        'occupancy': 'Occupancy Report',
+        'vehicle-history': 'Vehicle History',
+        'payment-summary': 'Payment Summary',
+    };
+
+    document.getElementById('report-title').textContent = titleMap[type] || 'Report';
+    document.getElementById('report-timestamp').textContent = `Generated: ${new Date().toLocaleString()}`;
+    document.getElementById('report-results').style.display = 'block';
+
+    let html = '';
+
+    switch (type) {
+        case 'daily':
+            html = `
+                <div class="metric-grid">
+                    <div class="metric-card"><div class="metric-label">Total Sessions</div><div class="metric-value">${data.total_sessions}</div></div>
+                    <div class="metric-card"><div class="metric-label">Completed</div><div class="metric-value success">${data.completed_sessions}</div></div>
+                    <div class="metric-card"><div class="metric-label">Active</div><div class="metric-value primary">${data.active_sessions}</div></div>
+                    <div class="metric-card"><div class="metric-label">Revenue</div><div class="metric-value success">${ParkFlow.formatCurrency(data.total_revenue)}</div></div>
+                    <div class="metric-card"><div class="metric-label">Occupancy</div><div class="metric-value warning">${data.occupancy_rate}%</div></div>
+                    <div class="metric-card"><div class="metric-label">Avg Duration</div><div class="metric-value">${data.average_duration_minutes} min</div></div>
+                </div>
+                <h4>Vehicle Type Breakdown</h4>
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>Type</th><th>Count</th></tr></thead>
+                        <tbody>
+                            ${data.vehicle_type_breakdown.map(v => `<tr><td>${v['vehicle__vehicle_type']}</td><td>${v.count}</td></tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            break;
+
+        case 'revenue':
+            html = `
+                <div class="metric-grid">
+                    <div class="metric-card"><div class="metric-label">Total Revenue</div><div class="metric-value success">${ParkFlow.formatCurrency(data.total_revenue)}</div></div>
+                    <div class="metric-card"><div class="metric-label">Transactions</div><div class="metric-value">${data.total_transactions}</div></div>
+                    <div class="metric-card"><div class="metric-label">Avg/Transaction</div><div class="metric-value">${ParkFlow.formatCurrency(data.average_per_transaction)}</div></div>
+                </div>
+                <h4>Daily Breakdown</h4>
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>Date</th><th>Revenue</th><th>Transactions</th></tr></thead>
+                        <tbody>
+                            ${data.daily_breakdown.map(d => `<tr><td>${d.date}</td><td>${ParkFlow.formatCurrency(d.total)}</td><td>${d.count}</td></tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            break;
+
+        case 'occupancy':
+            html = `
+                <div class="metric-grid">
+                    <div class="metric-card"><div class="metric-label">Total Slots</div><div class="metric-value">${data.total_slots}</div></div>
+                    <div class="metric-card"><div class="metric-label">Currently Occupied</div><div class="metric-value error">${data.current_occupied}</div></div>
+                    <div class="metric-card"><div class="metric-label">Occupancy Rate</div><div class="metric-value warning">${data.current_occupancy_rate}%</div></div>
+                </div>
+                <h4>Peak Hours</h4>
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>Hour</th><th>Sessions</th></tr></thead>
+                        <tbody>
+                            ${data.peak_hours.map(p => `<tr><td>${p.hour}:00</td><td>${p.count}</td></tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            break;
+
+        case 'vehicle-history':
+            html = `
+                <div class="metric-grid">
+                    <div class="metric-card"><div class="metric-label">Total Sessions</div><div class="metric-value">${data.total_sessions}</div></div>
+                    <div class="metric-card"><div class="metric-label">Completed</div><div class="metric-value success">${data.completed_sessions}</div></div>
+                    <div class="metric-card"><div class="metric-label">Total Paid</div><div class="metric-value success">${ParkFlow.formatCurrency(data.total_paid)}</div></div>
+                    <div class="metric-card"><div class="metric-label">Avg Duration</div><div class="metric-value">${data.average_duration_minutes} min</div></div>
+                </div>
+                <h4>Session History</h4>
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>Session</th><th>Slot</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Amount</th><th>Status</th></tr></thead>
+                        <tbody>
+                            ${data.sessions.map(s => `
+                                <tr>
+                                    <td>${s.session_id}</td>
+                                    <td>${s.slot}</td>
+                                    <td>${ParkFlow.formatDateTime(s.entry_time)}</td>
+                                    <td>${s.exit_time ? ParkFlow.formatDateTime(s.exit_time) : 'Active'}</td>
+                                    <td>${ParkFlow.formatDuration(s.duration_minutes)}</td>
+                                    <td>${ParkFlow.formatCurrency(s.amount_due)}</td>
+                                    <td><span class="badge badge-${s.status.toLowerCase()}">${s.status}</span></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            break;
+
+        case 'payment-summary':
+            html = `
+                <div class="metric-grid">
+                    <div class="metric-card"><div class="metric-label">Total Paid</div><div class="metric-value success">${ParkFlow.formatCurrency(data.total_paid)}</div></div>
+                </div>
+                <h4>By Status</h4>
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>Status</th><th>Count</th><th>Total</th></tr></thead>
+                        <tbody>
+                            ${data.by_status.map(s => `<tr><td>${s.payment_status}</td><td>${s.count}</td><td>${ParkFlow.formatCurrency(s.total || 0)}</td></tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+                <h4>By Method</h4>
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>Method</th><th>Count</th><th>Total</th></tr></thead>
+                        <tbody>
+                            ${data.by_method.map(m => `<tr><td>${m.payment_method}</td><td>${m.count}</td><td>${ParkFlow.formatCurrency(m.total || 0)}</td></tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            break;
+    }
+
+    document.getElementById('report-content').innerHTML = html;
+}
+
+function downloadReport() {
+    if (!currentReportData) {
+        ParkFlow.showAlert('No report data to download', 'warning');
+        return;
+    }
+
+    // Convert to CSV
+    let csv = '';
+    // This is a simplified CSV export - in practice you'd want more robust handling
+    ParkFlow.showAlert('CSV download not fully implemented yet', 'info');
+}
+</script>
+{% endblock %}

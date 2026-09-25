@@ -1,0 +1,123 @@
+{% extends 'base.html' %}
+
+{% block title %}Vehicles - ParkFlow Kenya{% endblock %}
+
+{% block content %}
+<div class="dashboard-header d-flex justify-between align-center">
+    <div>
+        <h2>Registered Vehicles</h2>
+        <p class="text-muted">View and manage vehicle registrations</p>
+    </div>
+    <button class="btn btn-primary" onclick="showRegisterModal()">Register Vehicle</button>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Registration</th>
+                        <th>Type</th>
+                        <th>Registered</th>
+                        <th>Active Session</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for vehicle in vehicles %}
+                    <tr>
+                        <td><strong>{{ vehicle.registration_number }}</strong></td>
+                        <td>{{ vehicle.vehicle_type }}</td>
+                        <td>{{ vehicle.created_at|date:"M d, Y H:i" }}</td>
+                        <td>
+                            {% if vehicle.parking_sessions.filter.status.ACTIVE %}
+                            <span class="badge badge-active">Yes</span>
+                            {% else %}
+                            <span class="badge badge-completed">No</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="{% url 'vehicles:history' vehicle.registration_number %}" class="btn btn-sm btn-secondary">History</a>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted" style="padding: var(--spacing-xl);">No vehicles registered</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Register Vehicle Modal -->
+<div id="register-modal" class="modal" style="display: none;">
+    <div class="modal-overlay" onclick="closeModal('register-modal')"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Register Vehicle</h3>
+            <button class="modal-close" onclick="closeModal('register-modal')">&times;</button>
+        </div>
+        <form id="register-form">
+            <div class="form-group">
+                <label for="reg-number">Registration Number</label>
+                <input type="text" id="reg-number" name="registration_number" placeholder="KAA 123A" required>
+                <div class="help-text">Format: KAA 123A</div>
+            </div>
+            <div class="form-group">
+                <label for="reg-type">Vehicle Type</label>
+                <select id="reg-type" name="vehicle_type" required>
+                    <option value="CAR">Car</option>
+                    <option value="MOTORCYCLE">Motorcycle</option>
+                    <option value="TRUCK">Truck</option>
+                    <option value="BUS">Bus</option>
+                    <option value="OTHER">Other</option>
+                </select>
+            </div>
+            <div style="display: flex; gap: var(--spacing-sm); justify-content: flex-end; margin-top: var(--spacing-lg);">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('register-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Register</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function showRegisterModal() {
+    document.getElementById('register-form').reset();
+    document.getElementById('register-modal').style.display = 'flex';
+}
+
+function closeModal(modalId) {
+    document.getElementById(modalId).style.display = 'none';
+}
+
+document.getElementById('register-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const data = Object.fromEntries(formData);
+    data.registration_number = ParkFlow.normalizeRegistration(data.registration_number);
+
+    try {
+        const response = await ParkFlow.request('/vehicles/register/', {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+
+        if (response.success) {
+            ParkFlow.showAlert(response.message, 'success');
+            closeModal('register-modal');
+            location.reload();
+        } else {
+            ParkFlow.showAlert(response.message, 'error');
+        }
+    } catch (error) {
+        ParkFlow.showAlert(error.message, 'error');
+    }
+});
+</script>
+{% endblock %}

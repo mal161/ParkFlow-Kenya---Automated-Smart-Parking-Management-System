@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+
+{% block title %}Payments - ParkFlow Kenya{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h2>Payments</h2>
+    <p class="text-muted">View payment records and transaction history</p>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Transaction Ref</th>
+                        <th>Vehicle</th>
+                        <th>Slot</th>
+                        <th>Amount</th>
+                        <th>Method</th>
+                        <th>Status</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for payment in payments %}
+                    <tr>
+                        <td><code>{{ payment.transaction_reference }}</code></td>
+                        <td>{{ payment.session.vehicle }}</td>
+                        <td>{{ payment.session.slot.slot_number }}</td>
+                        <td>{{ payment.amount|floatformat:2 }}</td>
+                        <td>{{ payment.payment_method }}</td>
+                        <td>
+                            <span class="badge badge-{{ payment.payment_status|lower }}">
+                                {{ payment.payment_status }}
+                            </span>
+                        </td>
+                        <td>{{ payment.payment_time|date:"M d, Y H:i" }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center text-muted" style="padding: var(--spacing-xl);">No payment records</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
