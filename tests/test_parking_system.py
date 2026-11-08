@@ -562,3 +562,58 @@ class DataStructureTests(TestCase):
         index.remove_session(1)
         self.assertEqual(len(index), 0)
         self.assertIsNone(index.get_by_vehicle('KAA 123A'))
+
+
+class ReceiptTests(TestCase):
+    """Printable receipt pages (server-rendered from the local replica)."""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        operator = get_user_model().objects.create_user('operator', password='pw-test-123')
+        self.client.force_login(operator)
+
+    def _paid_payment(self):
+        vehicle = Vehicle.objects.create(
+            registration_number='KAA 777X', vehicle_type='CAR'
+        )
+        slot = ParkingSlot.objects.create(
+            slot_number='R01', location='Receipt Test'
+        )
+        session = ParkingSession.objects.create(
+            vehicle=vehicle,
+            slot=slot,
+            status=ParkingSession.Status.COMPLETED,
+            duration_minutes=90,
+            amount_due=50,
+        )
+        return Payment.objects.create(
+            session=session,
+            amount=50,
+            payment_status=Payment.PaymentStatus.PAID,
+            transaction_reference='CASH-TESTRECEIPT01',
+        )
+
+    def test_receipt_page_renders_payment_details(self):
+        payment = self._paid_payment()
+
+        response = self.client.get(payment.get_absolute_url())
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn('PARKING RECEIPT', content)
+        self.assertIn('CASH-TESTRECEIPT01', content)
+        self.assertIn('KAA 777X (CAR)', content)
+        self.assertIn('90 min', content)
+        self.assertIn('50.00', content)
+
+    def test_payments_list_links_to_receipt(self):
+        payment = self._paid_payment()
+
+        response = self.client.get('/payments/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, payment.get_absolute_url())
+
+    def test_unknown_receipt_returns_404(self):
+        response = self.client.get('/payments/999999/receipt/')
+        self.assertEqual(response.status_code, 404)

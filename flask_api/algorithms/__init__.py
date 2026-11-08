@@ -14,8 +14,10 @@ Algorithms Implemented:
 7. Waiting Queue Management - FIFO processing
 """
 
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any
+import itertools
+import uuid
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 
 from flask_api.data_structures import (
@@ -30,7 +32,12 @@ from flask_api.data_structures import (
     SlotStatus,
     SessionStatus,
     PaymentStatus,
+    utc_now,
 )
+
+
+# Vehicle types with a fee structure (must match the SQL CHECK constraint).
+VALID_VEHICLE_TYPES = ('CAR', 'MOTORCYCLE', 'TRUCK', 'BUS', 'OTHER')
 
 
 # =============================================================================
@@ -91,6 +98,16 @@ class FeeStructure:
             return self.six_hour_rate
         else:
             return self.over_six_hour_rate
+
+    def to_dict(self) -> Dict[str, int]:
+        """Serialisable rate table (used by the fee API)."""
+        return {
+            'free_minutes': self.free_minutes,
+            'two_hour_rate': self.two_hour_rate,
+            'four_hour_rate': self.four_hour_rate,
+            'six_hour_rate': self.six_hour_rate,
+            'over_six_hour_rate': self.over_six_hour_rate,
+        }
 
     def get_fee_tiers(self) -> List[Dict[str, Any]]:
         """Get human-readable fee tiers for display."""
@@ -161,51 +178,37 @@ def calculate_parking_fee(vehicle_type: str, duration_minutes: int) -> int:
 # DURATION CALCULATION ALGORITHM
 # =============================================================================
 
+def _as_utc(dt: datetime) -> datetime:
+    """Interpret naive datetimes as UTC (the engine's convention)."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def calculate_duration_minutes(entry_time: datetime, exit_time: Optional[datetime] = None) -> int:
     """
     Calculate parking duration in minutes.
 
-    Uses ceiling to ensure minimum 1 minute charging.
-    Handles timezone-aware datetimes correctly.
-    Rounds UP to nearest minute so that 30:01 -> 31 minutes (fee applies).
+    Rounds UP to the nearest minute so that 30:01 -> 31 minutes (fee
+    applies); the minimum charged duration is 1 minute. Naive datetimes
+    are treated as UTC, aware datetimes are converted to UTC.
 
     Time Complexity: O(1)
     Space Complexity: O(1)
 
     Args:
-        entry_time: When vehicle entered (timezone-aware or naive)
-        exit_time: When vehicle exited (timezone-aware or naive, default: now UTC)
+        entry_time: When the vehicle entered
+        exit_time: When the vehicle exited (default: now)
 
     Returns:
         Duration in minutes (minimum 1, rounded up to nearest minute)
     """
-    from datetime import timezone
-
     if exit_time is None:
-        exit_time = datetime.now(timezone.utc)
+        exit_time = utc_now()
 
-    # Normalize both to UTC and strip timezone info for comparison
-    if entry_time.tzinfo is not None:
-        # If entry is timezone-aware, convert to UTC and strip tz
-        # Use replace to strip, but only after ensuring we're working with a copy
-        entry = entry_time.astimezone(timezone.utc).replace(tzinfo=None)
-    else:
-        # Naive datetime - assume it's already in the correct timezone (Africa/Nairobi)
-        # and strip to make it naive for subtraction
-        entry = entry_time
+    total_seconds = (_as_utc(exit_time) - _as_utc(entry_time)).total_seconds()
 
-    if exit_time.tzinfo is not None:
-        # If exit is timezone-aware, convert to UTC and strip tz
-        exit_ = exit_time.astimezone(timezone.utc).replace(tzinfo=None)
-    else:
-        # Naive datetime - assume UTC
-        exit_ = exit_time.replace(tzinfo=None) if exit_time.tzinfo is not None else exit_time
-
-    delta = exit_ - entry
-    total_seconds = delta.total_seconds()
-
-    # Ceiling division: round up to nearest minute
-    # This ensures 30:01 -> 31 minutes (fee applies at 31min)
+    # Ceiling division: round up to the nearest whole minute.
     minutes = int(total_seconds // 60)
     if total_seconds % 60 > 0:
         minutes += 1
@@ -344,8 +347,17 @@ def process_vehicle_entry(
     Returns:
         EntryResult with outcome details
     """
-    # Step 1: Normalize registration
+    # Step 1: Normalize registration and validate the vehicle type
     norm_reg = VehicleRegistry.normalize_registration(registration_number)
+    vehicle_type = (vehicle_type or "CAR").upper()
+    if vehicle_type not in VALID_VEHICLE_TYPES:
+        return EntryResult(
+            success=False,
+            message=(
+                "Invalid vehicle type. Must be one of: "
+                + ", ".join(VALID_VEHICLE_TYPES)
+            ),
+        )
 
     # Step 2: Check for existing active session
     existing_session = session_index.get_by_vehicle(norm_reg)
@@ -363,15 +375,14 @@ def process_vehicle_entry(
         vehicle_registry.register_vehicle(vehicle)
     elif vehicle.vehicle_type != vehicle_type:
         vehicle_registry.update_vehicle_type(norm_reg, vehicle_type)
-        vehicle.vehicle_type = vehicle_type
 
     # Step 4: Allocate slot
     slot = allocation_strategy.allocate(slot_registry)
 
     if slot is None:
-        # Step 5: No slots available - add to waiting queue
-        waiting_queue.enqueue(norm_reg, vehicle_type)
-        position = waiting_queue.size()
+        # Step 5: No slots available - add to waiting queue (a vehicle
+        # that is already waiting keeps its original position).
+        position = waiting_queue.enqueue(norm_reg, vehicle_type)
         return EntryResult(
             success=False,
             message="Parking full. Vehicle added to waiting queue.",
@@ -382,10 +393,10 @@ def process_vehicle_entry(
 
     # Step 6: Create parking session
     session = ParkingSession(
-        session_id=_generate_session_id(session_index),
+        session_id=session_index.next_id(),
         vehicle_id=norm_reg,
         slot_id=slot.slot_number,
-        entry_time=datetime.utcnow(),
+        entry_time=utc_now(),
         status=SessionStatus.ACTIVE,
     )
 
@@ -399,15 +410,6 @@ def process_vehicle_entry(
         slot=slot,
         vehicle=vehicle,
     )
-
-
-def _generate_session_id(session_index: SessionIndex) -> int:
-    """Generate a unique session ID (never below the database floor)."""
-    with session_index._lock:
-        return max(
-            max(session_index._by_id.keys(), default=0),
-            session_index.id_floor,
-        ) + 1
 
 
 # =============================================================================
@@ -469,12 +471,19 @@ def process_vehicle_exit(
     Returns:
         ExitResult with fee, duration and payment/authorization state
     """
-    # Accept ISO-8601 strings coming from HTTP/JSON payloads
+    # Accept ISO-8601 strings (tests / trusted tooling only - the public
+    # HTTP API does not let clients choose the exit time).
     if isinstance(exit_time, str):
-        exit_time = datetime.fromisoformat(exit_time)
+        try:
+            exit_time = datetime.fromisoformat(exit_time)
+        except ValueError:
+            return ExitResult(
+                success=False,
+                message="exit_time must be an ISO-8601 datetime",
+            )
 
     if exit_time is None:
-        exit_time = datetime.utcnow()
+        exit_time = utc_now()
 
     # Step 1: Find active session
     norm_reg = VehicleRegistry.normalize_registration(registration_number)
@@ -489,6 +498,11 @@ def process_vehicle_exit(
     # Steps 2-5: duration and fee. Reuse recorded values if exit
     # was already recorded (idempotent re-submission of the exit request).
     if session.exit_time is None:
+        if _as_utc(exit_time) < _as_utc(session.entry_time):
+            return ExitResult(
+                success=False,
+                message="Exit time cannot be earlier than the entry time",
+            )
         duration = calculate_duration_minutes(session.entry_time, exit_time)
         fee = 0
         vehicle = vehicle_registry.get_vehicle(norm_reg)
@@ -498,7 +512,7 @@ def process_vehicle_exit(
         session.exit_time = exit_time
         session.duration_minutes = duration
         session.amount_due = fee
-        session.updated_at = datetime.utcnow()
+        session.updated_at = utc_now()
     else:
         duration = session.duration_minutes
         fee = session.amount_due
@@ -598,8 +612,9 @@ def process_payment(
             message="Session is already completed",
         )
 
-    # Validate amount against server-calculated amount due
-    if amount != session.amount_due:
+    # Validate amount against server-calculated amount due (bool is an
+    # int subclass in Python - reject it explicitly).
+    if isinstance(amount, bool) or amount != session.amount_due:
         return PaymentResult(
             success=False,
             message=f"Invalid amount. Expected KSh {session.amount_due}, got KSh {amount}",
@@ -614,7 +629,6 @@ def process_payment(
 
     # Generate transaction reference if not provided
     if not transaction_reference:
-        import uuid
         transaction_reference = f"CASH-{uuid.uuid4().hex[:12].upper()}"
 
     # Create payment
@@ -625,7 +639,6 @@ def process_payment(
         payment_method="CASH",
         status=PaymentStatus.PAID,
         transaction_reference=transaction_reference,
-        payment_time=datetime.utcnow(),
     )
     payment.mark_paid()
 
@@ -637,10 +650,13 @@ def process_payment(
     )
 
 
+# In-memory payment ids (replaced by the database id once persisted).
+_payment_ids = itertools.count(1)
+
+
 def _generate_payment_id() -> int:
-    """Generate unique payment ID (simplified)."""
-    import random
-    return random.randint(100000, 999999)
+    """Generate a process-unique payment id (collision-free counter)."""
+    return next(_payment_ids)
 
 
 # =============================================================================
@@ -731,5 +747,5 @@ def authorize_exit_barrier(payment_successful: bool, session_completed: bool) ->
         is_open=authorized,
         authorized=authorized,
         message="EXIT AUTHORIZED" if authorized else "EXIT DENIED - Payment Required",
-        timestamp=datetime.utcnow(),
+        timestamp=utc_now(),
     )

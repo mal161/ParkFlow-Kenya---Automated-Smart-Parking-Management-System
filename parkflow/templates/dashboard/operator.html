@@ -295,23 +295,9 @@ async function calculateExitFee() {
     }
 
     try {
-        // 1. Find the active session for this vehicle
-        const response = await ParkFlow.request(`/vehicles/lookup/?registration_number=${encodeURIComponent(reg)}`);
-
-        if (!response.success) {
-            ParkFlow.showAlert(response.message, 'error');
-            return;
-        }
-
-        if (!response.data.has_active_session) {
-            ParkFlow.showAlert('No active parking session for this vehicle', 'error');
-            return;
-        }
-
-        const session = response.data.active_session;
-        const vehicleType = response.data.vehicle_type;
-
-        // 2. Record the exit (engine calculates duration and fee)
+        // 1. Record the exit: the engine finds the active session and
+        //    calculates duration and fee (the response carries everything
+        //    the summary needs, so no separate lookup call is required).
         const exitResponse = await ParkFlow.request('/parking/exit/', {
             method: 'POST',
             body: JSON.stringify({ registration_number: reg }),
@@ -323,27 +309,27 @@ async function calculateExitFee() {
         }
 
         const exit = exitResponse.data;
-        currentExitSession = session;
+        currentExitSession = exit;
         currentExitFee = exit.fee_ksh;
 
-        // 3. Free parking: exit is already authorized, nothing to pay
+        // 2. Free parking: exit is already authorized, nothing to pay
         if (!exit.payment_required) {
             closeModal('exit-modal');
             location.reload();
             return;
         }
 
-        // 4. Show the fee breakdown before cash payment
-        document.getElementById('fee-details').innerHTML = `
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--spacing-sm); margin-bottom: var(--spacing-md);">
-                <div><strong>Vehicle:</strong> ${reg} (${vehicleType})</div>
-                <div><strong>Slot:</strong> ${session.slot}</div>
-                <div><strong>Entry Time:</strong> ${ParkFlow.formatDateTime(session.entry_time)}</div>
-                <div><strong>Duration:</strong> ${ParkFlow.formatDuration(exit.duration_minutes)}</div>
-                <div><strong>Vehicle Type:</strong> ${vehicleType}</div>
-                <div><strong>Fee:</strong> ${ParkFlow.formatCurrency(exit.fee_ksh)}</div>
-            </div>
-        `;
+        // 3. Show the fee breakdown before cash payment. Built with DOM
+        //    nodes + textContent (never innerHTML) so typed or stored text
+        //    can't inject markup/script into the page.
+        ParkFlow.renderDetails(document.getElementById('fee-details'), [
+            ['Vehicle', `${exit.vehicle} (${exit.vehicle_type})`],
+            ['Slot', exit.slot_number],
+            ['Entry Time', ParkFlow.formatDateTime(exit.entry_time)],
+            ['Duration', ParkFlow.formatDuration(exit.duration_minutes)],
+            ['Vehicle Type', exit.vehicle_type],
+            ['Fee', ParkFlow.formatCurrency(exit.fee_ksh)],
+        ]);
 
         document.getElementById('exit-form-content').style.display = 'none';
         document.getElementById('exit-fee-display').style.display = 'block';
@@ -373,9 +359,14 @@ async function processPayment() {
             return;
         }
 
-        // Success feedback arrives as a Django message after the reload.
-        closeModal('exit-modal');
-        location.reload();
+        // Take the operator straight to the printable receipt.
+        const receiptUrl = paymentResponse.data && paymentResponse.data.receipt_url;
+        if (receiptUrl) {
+            window.location.href = receiptUrl;
+        } else {
+            closeModal('exit-modal');
+            location.reload();
+        }
 
     } catch (error) {
         ParkFlow.showAlert(error.message, 'error');

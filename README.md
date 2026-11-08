@@ -36,6 +36,8 @@ Supabase PostgreSQL  (source of truth)
 - Vehicle entry → automatic slot allocation (first-fit or nearest-to-entrance)
 - Vehicle exit → duration + fee calculation (ceiling rounding)
 - Cash payment processing with amount validation; exit barrier logic
+- Printable parking receipts (from the payments list, or shown right
+  after checkout with a one-click print button)
 - FIFO waiting queue when the lot is full (served on every slot release)
 - Vehicle registration & lookup (normalised plates: `KAA 123A`)
 - Dashboard (occupancy, revenue, active sessions), payments list,
@@ -63,7 +65,7 @@ slot, and serves the next queued vehicle. Only `CASH` payments are enabled
 
 ## Tech stack
 
-- Python 3.14, Django 6.1.1, Flask 3.1.3, flask-cors, supabase 2.31.0,
+- Python 3.14, Django 6.1.1, Flask 3.1.3, supabase 2.31.0,
   python-dotenv (pinned in `requirements.txt`)
 - SQLite (local reporting replica), Supabase PostgreSQL (source of truth)
 
@@ -77,13 +79,18 @@ pip install -r requirements.txt
 
 # 2. Environment
 copy .env.example .env        # then fill in SUPABASE_URL / SUPABASE_KEY
-                              # (optional: DJANGO_SECRET_KEY, DEBUG)
+                              # (recommended: DJANGO_SECRET_KEY, FLASK_API_KEY)
 
 # 3. Database schema
 #    - Run the contents of docs/database.sql in the Supabase SQL editor
 #      (creates 5 tables, RLS policies, triggers, 20 seeded slots, rates)
 #    - Local reporting replica:
 .venv\Scripts\python.exe parkflow\manage.py migrate
+
+# 4. Operator account (every page requires sign-in)
+.venv\Scripts\python.exe parkflow\manage.py createsuperuser
+#    Extra operators: create users in /admin/ (staff status is only
+#    needed for the admin site, not for the operator pages).
 ```
 
 ## Running
@@ -98,13 +105,15 @@ python run_flask.py
 python parkflow\manage.py runserver
 ```
 
-Open http://127.0.0.1:8000/ — the root redirects to the operator dashboard.
+Open http://127.0.0.1:8000/ and sign in — the root redirects to the
+operator dashboard.
 Admin: http://127.0.0.1:8000/admin/
 
 ## Testing
 
 ```powershell
-# Unit/integration tests (33 tests)
+# Unit/integration/security regression tests (63 tests, no database
+# or network needed - Supabase is never contacted)
 python parkflow\manage.py test tests -v 1
 
 # Full-stack end-to-end check (starts its own Flask, exercises
@@ -163,24 +172,41 @@ flask_api/           Flask engine
   data_structures/   registries, session index, waiting queue
   services/          ParkingService (orchestration + _sync) , SupabaseService
 docs/database.sql    Supabase schema, RLS, triggers, seed data
-tests/               Django test suite (33 tests)
+tests/               Django test suite (63 tests)
 e2e_check.py         full-stack end-to-end script
 run_flask.py         Flask runner (port 5001)
 ```
 
 ## Security notes
 
-- `.env` is gitignored; `.env.example` documents the variables.
-- Django `SECRET_KEY` / `DEBUG` / `ALLOWED_HOSTS` are env-overridable
-  (insecure defaults are for local development only).
+- **Authentication:** every page and JSON endpoint requires a signed-in
+  operator (`LoginRequiredMiddleware`); sign in at `/accounts/login/`.
+- **Engine API key:** set the same `FLASK_API_KEY` for Django and Flask.
+  Django then sends it as `X-API-Key` and Flask rejects calls without it
+  (constant-time comparison). Without it Flask logs a warning at startup.
+  Flask binds to `127.0.0.1` only and has no CORS - browsers never call it.
+- **Server-side time and money:** the engine always uses its own clock for
+  exits (clients cannot back-date an exit to park free) and validates the
+  payment amount against the fee it calculated. `PARKFLOW_ALLOW_EXIT_TIME_OVERRIDE=1`
+  exists only for `e2e_check.py`.
+- **Input validation:** plates are letters/digits only, vehicle types are
+  whitelisted, JSON bodies must be objects; malformed input returns 400.
+- **No internals leaked:** unexpected errors and database failures are
+  logged server-side; clients get a generic message.
+- **XSS / CSV injection:** templates auto-escape, the dashboard builds
+  dynamic content with `textContent`, and CSV exports neutralise cells
+  starting with `= + - @`.
+- **Concurrency:** entry/exit/payment run under one service lock, so
+  concurrent requests cannot double-allocate a slot or vehicle.
+- `.env` is gitignored; `.env.example` documents the variables. Django
+  refuses to start with the default `SECRET_KEY` when `DEBUG=False`, and
+  enables secure cookies / SSL redirect in that mode.
 - CSRF: `base.html` renders the token so Django sets the `csrftoken` cookie;
   `base.js` sends it as the `X-CSRFToken` header on every `fetch()` POST.
-- Flask CORS is restricted to the local Django origin; browsers never call
-  Flask directly (Django proxies server-to-server).
-- Supabase: RLS is enabled on all tables. The key in `.env` is the publishable
-  (anon) key — acceptable only because the API is server-side and local.
-  For production use a service-role key on the server, restrict the anon
-  policies to `authenticated`, and never ship either key to a browser.
+- Supabase: RLS is enabled on all tables. With the publishable (anon) key
+  the prototype policies grant anon full access - acceptable only because
+  the key never leaves the server. For production set
+  `SUPABASE_SERVICE_KEY` and restrict the policies to `authenticated`.
 
 ## Known limitations
 
@@ -196,6 +222,9 @@ run_flask.py         Flask runner (port 5001)
   `KAA 123A` (space after 3rd character). If your Supabase project still has
   the older trigger, re-run `docs/database.sql` in the SQL editor; the API
   accepts both formats until then.
-- **No authentication on app pages** beyond Django admin; the system assumes
-  a trusted local network (typical for an academic demo).
+- **Completed sessions stay in engine memory** until restart (fine for a
+  single site/day; a long-running deployment should prune them).
+- **Fee rates are code constants** (`DEFAULT_FEE_STRUCTURES`); the
+  `parking_rates` table / Django `ParkingRate` admin are reference data
+  and do not change the fees the engine charges.
 - Cash-only payments; M-Pesa/card integration is future work.

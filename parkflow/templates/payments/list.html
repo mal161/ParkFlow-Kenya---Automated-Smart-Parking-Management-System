@@ -21,6 +21,7 @@
                         <th>Method</th>
                         <th>Status</th>
                         <th>Time</th>
+                        <th>Receipt</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -37,15 +38,19 @@
                             </span>
                         </td>
                         <td>{{ payment.payment_time|date:"M d, Y H:i" }}</td>
+                        <td>
+                            <a href="{% url 'payments:receipt' payment.id %}" class="btn btn-sm btn-secondary">Receipt</a>
+                        </td>
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="7" class="text-center text-muted" style="padding: var(--spacing-xl);">No payment records</td>
+                        <td colspan="8" class="text-center text-muted" style="padding: var(--spacing-xl);">No payment records</td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
+        {% include 'includes/pagination.html' %}
     </div>
 </div>
 {% endblock %}

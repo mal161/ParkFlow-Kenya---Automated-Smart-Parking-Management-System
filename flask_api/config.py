@@ -1,107 +1,62 @@
 """
-Flask API Configuration for ParkFlow Kenya.
+Flask API configuration for ParkFlow Kenya.
 
-Centralized configuration management for the Flask API service.
+Business rules (fee tiers, vehicle types, statuses) live in the
+algorithms / data_structures modules - the single source of truth -
+so they are intentionally not duplicated here.
 """
 import os
+
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 
+def _env_flag(name: str, default: str = 'false') -> bool:
+    return os.environ.get(name, default).strip().lower() in ('1', 'true', 'yes')
+
+
 class Config:
-    """Base configuration class."""
+    """Base configuration."""
 
-    # Flask
-    SECRET_KEY = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-change-in-production')
-    DEBUG = os.environ.get('FLASK_DEBUG', 'True').lower() == 'true'
+    DEBUG = False
+    TESTING = False
 
-    # Supabase
+    # Supabase (read by SupabaseService; listed here for discoverability)
     SUPABASE_URL = os.environ.get('SUPABASE_URL')
-    SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
-    SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY')
 
-    # API
     API_PREFIX = '/api/v1'
 
-    # Parking Business Rules
-    DEFAULT_FREE_MINUTES = 30
-    DEFAULT_RATES = {
-        'CAR': {
-            'free_minutes': 30,
-            'two_hour_rate': 50,
-            'four_hour_rate': 100,
-            'six_hour_rate': 300,
-            'over_six_hour_rate': 500,
-        },
-        'MOTORCYCLE': {
-            'free_minutes': 30,
-            'two_hour_rate': 20,
-            'four_hour_rate': 50,
-            'six_hour_rate': 100,
-            'over_six_hour_rate': 200,
-        },
-        'TRUCK': {
-            'free_minutes': 30,
-            'two_hour_rate': 100,
-            'four_hour_rate': 200,
-            'six_hour_rate': 500,
-            'over_six_hour_rate': 1000,
-        },
-        'BUS': {
-            'free_minutes': 30,
-            'two_hour_rate': 150,
-            'four_hour_rate': 300,
-            'six_hour_rate': 800,
-            'over_six_hour_rate': 1500,
-        },
-        'OTHER': {
-            'free_minutes': 30,
-            'two_hour_rate': 50,
-            'four_hour_rate': 100,
-            'six_hour_rate': 300,
-            'over_six_hour_rate': 500,
-        },
-    }
+    # Shared secret Django sends as X-API-Key. Empty = no check (local dev).
+    API_KEY = os.environ.get('FLASK_API_KEY', '')
 
-    # Slot Statuses
-    SLOT_STATUSES = ['AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'RESERVED', 'OUT_OF_SERVICE']
-
-    # Session Statuses
-    SESSION_STATUSES = ['ACTIVE', 'COMPLETED', 'CANCELLED']
-
-    # Payment Statuses
-    PAYMENT_STATUSES = ['PENDING', 'PAID', 'FAILED', 'REFUNDED']
-
-    # Payment Methods
-    # Only CASH is enabled for now; other methods will be configured later.
-    PAYMENT_METHODS = ['CASH']
-
-    # Timezone
-    TIMEZONE = 'Africa/Nairobi'
+    # Let clients supply exit_time on /parking/exit. Only for automated
+    # end-to-end tests - in normal operation it would allow back-dating
+    # an exit to avoid fees.
+    ALLOW_EXIT_TIME_OVERRIDE = _env_flag('PARKFLOW_ALLOW_EXIT_TIME_OVERRIDE')
 
 
 class DevelopmentConfig(Config):
-    """Development configuration."""
-    DEBUG = True
+    DEBUG = _env_flag('FLASK_DEBUG')
 
 
 class ProductionConfig(Config):
-    """Production configuration."""
-    DEBUG = False
+    pass
 
 
 class TestingConfig(Config):
-    """Testing configuration."""
     TESTING = True
-    DEBUG = True
+    ALLOW_EXIT_TIME_OVERRIDE = True
 
 
-# Configuration dictionary
-config = {
+_CONFIGS = {
     'development': DevelopmentConfig,
     'production': ProductionConfig,
     'testing': TestingConfig,
     'default': DevelopmentConfig,
 }
+
+
+def config_by_name(name: str):
+    """Configuration class for FLASK_ENV (falls back to development)."""
+    return _CONFIGS.get((name or 'default').lower(), DevelopmentConfig)

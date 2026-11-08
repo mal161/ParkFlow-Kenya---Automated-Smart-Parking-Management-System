@@ -13,6 +13,11 @@
 
 <div class="card">
     <div class="card-body">
+        <form method="get" style="display: flex; gap: var(--spacing-sm); margin-bottom: var(--spacing-md);">
+            <input type="search" name="q" value="{{ query }}" placeholder="Search registration (e.g. KAA 123A)" aria-label="Search registration" style="flex: 1;">
+            <button type="submit" class="btn btn-secondary">Search</button>
+            {% if query %}<a href="{% url 'vehicles:list' %}" class="btn btn-secondary">Clear</a>{% endif %}
+        </form>
         <div class="table-container">
             <table>
                 <thead>
@@ -31,7 +36,7 @@
                         <td>{{ vehicle.vehicle_type }}</td>
                         <td>{{ vehicle.created_at|date:"M d, Y H:i" }}</td>
                         <td>
-                            {% if vehicle.parking_sessions.filter.status.ACTIVE %}
+                            {% if vehicle.active_session_count %}
                             <span class="badge badge-active">Yes</span>
                             {% else %}
                             <span class="badge badge-completed">No</span>
@@ -49,6 +54,7 @@
                 </tbody>
             </table>
         </div>
+        {% include 'includes/pagination.html' %}
     </div>
 </div>
 

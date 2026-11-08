@@ -19,10 +19,32 @@ Time Complexities:
 
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional, Any
 import threading
+
+
+def utc_now() -> datetime:
+    """Current time as a timezone-aware UTC datetime.
+
+    Replaces the deprecated utc_now() (naive) so every timestamp
+    the engine produces carries an explicit +00:00 offset.
+    """
+    return datetime.now(timezone.utc)
+
+
+def normalize_registration(reg: str) -> str:
+    """Canonical plate format: strip whitespace, uppercase, then insert a
+    space after the 3rd character ('kaa123a' -> 'KAA 123A').
+
+    Must match the SQL trigger in docs/database.sql and the Django side
+    (common.plates.normalize_registration).
+    """
+    clean = ''.join(reg.split()).upper()
+    if len(clean) >= 4:
+        return clean[:3] + ' ' + clean[3:]
+    return clean
 
 
 class SlotStatus(Enum):
@@ -64,8 +86,8 @@ class ParkingSlot:
     slot_number: str
     status: SlotStatus = SlotStatus.AVAILABLE
     location: str = ""
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
 
     def is_available(self) -> bool:
         """Check if slot is available for parking."""
@@ -74,17 +96,17 @@ class ParkingSlot:
     def occupy(self) -> None:
         """Mark slot as occupied."""
         self.status = SlotStatus.OCCUPIED
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
 
     def release(self) -> None:
         """Mark slot as available."""
         self.status = SlotStatus.AVAILABLE
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
 
     def set_maintenance(self) -> None:
         """Mark slot as under maintenance."""
         self.status = SlotStatus.MAINTENANCE
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -124,8 +146,8 @@ class Vehicle:
     """
     registration_number: str
     vehicle_type: str = "CAR"
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -175,38 +197,20 @@ class ParkingSession:
     duration_minutes: int = 0
     amount_due: int = 0
     status: SessionStatus = SessionStatus.ACTIVE
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
 
     def calculate_duration(self, current_time: Optional[datetime] = None) -> int:
         """
-        Calculate parking duration in minutes.
+        Parking duration in minutes (ceiling rounding, minimum 1).
 
-        Uses ceiling rounding so that 30:01 -> 31 minutes (fee boundary).
-
-        Args:
-            current_time: Time to calculate duration up to (default: now).
-
-        Returns:
-            Duration in minutes (minimum 1, rounded up to nearest minute).
+        Delegates to algorithms.calculate_duration_minutes so there is a
+        single implementation of the rounding rule.
         """
-        from datetime import timezone
-        if current_time is None:
-            current_time = datetime.now(timezone.utc)
-        end_time = self.exit_time if self.exit_time else current_time
-        # Normalize to UTC and strip tz for subtraction
-        e_start = self.entry_time
-        if e_start.tzinfo is not None:
-            e_start = e_start.astimezone(timezone.utc).replace(tzinfo=None)
-        e_end = end_time
-        if e_end.tzinfo is not None:
-            e_end = e_end.astimezone(timezone.utc).replace(tzinfo=None)
-        delta = e_end - e_start
-        total = delta.total_seconds()
-        minutes = int(total // 60)
-        if total % 60 > 0:
-            minutes += 1
-        return max(1, minutes)
+        from flask_api.algorithms import calculate_duration_minutes
+        return calculate_duration_minutes(
+            self.entry_time, self.exit_time or current_time
+        )
 
     def is_active(self) -> bool:
         """Check if session is currently active."""
@@ -218,7 +222,7 @@ class ParkingSession:
         self.duration_minutes = duration_minutes
         self.amount_due = amount_due
         self.status = SessionStatus.COMPLETED
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -277,13 +281,13 @@ class Payment:
     payment_method: str
     status: PaymentStatus = PaymentStatus.PENDING
     transaction_reference: str = ""
-    payment_time: datetime = field(default_factory=datetime.utcnow)
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    payment_time: datetime = field(default_factory=utc_now)
+    created_at: datetime = field(default_factory=utc_now)
 
     def mark_paid(self) -> None:
         """Mark payment as successful."""
         self.status = PaymentStatus.PAID
-        self.payment_time = datetime.utcnow()
+        self.payment_time = utc_now()
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -460,13 +464,8 @@ class VehicleRegistry:
         self._vehicles: Dict[str, Vehicle] = {}
         self._lock = threading.RLock()
 
-    @staticmethod
-    def normalize_registration(reg: str) -> str:
-        """Normalize registration number to standard format."""
-        clean = reg.replace(' ', '').upper()
-        if len(clean) >= 4:
-            return clean[:3] + ' ' + clean[3:]
-        return clean
+    # Kept as a static method for backwards compatibility with callers.
+    normalize_registration = staticmethod(normalize_registration)
 
     def register_vehicle(self, vehicle: Vehicle) -> bool:
         """
@@ -513,7 +512,7 @@ class VehicleRegistry:
             vehicle = self._vehicles.get(norm_reg)
             if vehicle:
                 vehicle.vehicle_type = vehicle_type
-                vehicle.updated_at = datetime.utcnow()
+                vehicle.updated_at = utc_now()
                 return True
             return False
 
@@ -549,20 +548,44 @@ class WaitingQueue:
         self._queue: deque = deque()
         self._lock = threading.RLock()
 
-    def enqueue(self, vehicle_reg: str, vehicle_type: str = "CAR") -> None:
+    def enqueue(self, vehicle_reg: str, vehicle_type: str = "CAR") -> int:
         """
-        Add a vehicle to the waiting queue.
+        Add a vehicle to the back of the waiting queue.
+
+        A vehicle that is already waiting keeps its place (no duplicate
+        entries when the operator retries the entry).
 
         Args:
             vehicle_reg: Vehicle registration number
             vehicle_type: Type of vehicle
+
+        Returns:
+            The vehicle's 1-based position in the queue.
         """
         with self._lock:
+            existing = self.position(vehicle_reg)
+            if existing:
+                return existing
             self._queue.append({
                 'registration_number': vehicle_reg,
                 'vehicle_type': vehicle_type,
-                'queued_at': datetime.utcnow(),
+                'queued_at': utc_now(),
             })
+            return len(self._queue)
+
+    def enqueue_front(self, item: Dict[str, Any]) -> None:
+        """Put a dequeued vehicle back at the head (keeps FIFO fairness)."""
+        with self._lock:
+            self._queue.appendleft(item)
+
+    def position(self, registration_number: str) -> int:
+        """1-based queue position of a vehicle, or 0 if not queued. O(n)."""
+        norm_reg = normalize_registration(registration_number)
+        with self._lock:
+            for index, item in enumerate(self._queue, start=1):
+                if normalize_registration(item['registration_number']) == norm_reg:
+                    return index
+            return 0
 
     def dequeue(self) -> Optional[Dict[str, Any]]:
         """
@@ -595,10 +618,10 @@ class WaitingQueue:
         Returns:
             True if removed, False if not found
         """
+        norm_reg = normalize_registration(registration_number)
         with self._lock:
-            norm_reg = VehicleRegistry.normalize_registration(registration_number)
-            for i, item in enumerate(self._queue):
-                if VehicleRegistry.normalize_registration(item['registration_number']) == norm_reg:
+            for item in self._queue:
+                if normalize_registration(item['registration_number']) == norm_reg:
                     self._queue.remove(item)
                     return True
             return False
@@ -643,6 +666,11 @@ class SessionIndex:
         self.id_floor: int = 0
         self._lock = threading.RLock()
 
+    def next_id(self) -> int:
+        """Next unused session id (never below the database floor)."""
+        with self._lock:
+            return max(max(self._by_id, default=0), self.id_floor) + 1
+
     def add_session(self, session: ParkingSession) -> None:
         """Add a session to the index."""
         with self._lock:
@@ -659,17 +687,13 @@ class SessionIndex:
         """Get active session for a vehicle."""
         with self._lock:
             session_id = self._by_vehicle.get(vehicle_id)
-            if session_id:
-                return self._by_id.get(session_id)
-            return None
+            return None if session_id is None else self._by_id.get(session_id)
 
     def get_by_slot(self, slot_id: str) -> Optional[ParkingSession]:
         """Get active session for a slot."""
         with self._lock:
             session_id = self._by_slot.get(slot_id)
-            if session_id:
-                return self._by_id.get(session_id)
-            return None
+            return None if session_id is None else self._by_id.get(session_id)
 
     def remove_session(self, session_id: int) -> bool:
         """Remove a session from the index."""

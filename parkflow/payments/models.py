@@ -4,6 +4,7 @@ Payments app models.
 This module defines the Payment model for tracking parking fee payments.
 """
 from django.db import models
+from django.urls import reverse
 from django.utils import timezone
 
 
@@ -71,6 +72,10 @@ class Payment(models.Model):
     def is_successful(self) -> bool:
         """Check if payment was successful."""
         return self.payment_status == self.PaymentStatus.PAID
+
+    def get_absolute_url(self):
+        """URL of the printable receipt for this payment."""
+        return reverse('payments:receipt', args=[self.pk])
 
     def mark_paid(self):
         """Mark payment as paid."""

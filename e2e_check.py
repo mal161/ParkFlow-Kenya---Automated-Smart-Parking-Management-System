@@ -1,8 +1,13 @@
 import json, os, subprocess, sys, time, urllib.request, urllib.error
 
+# Test-only: lets this script record an exit 90 minutes after entry.
+# Never set this flag for normal operation (it allows fee-free back-dated exits).
+os.environ["PARKFLOW_ALLOW_EXIT_TIME_OVERRIDE"] = "1"
+
 flask_proc = subprocess.Popen(
     [sys.executable, "run_flask.py"],
     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    env=os.environ.copy(),
 )
 ready = False
 for _ in range(60):
@@ -29,7 +34,11 @@ try:
     from django.test.utils import setup_test_environment
     setup_test_environment()
     from django.test import Client
+    from django.contrib.auth import get_user_model
     c = Client()
+    # Every page requires a signed-in operator.
+    operator, _ = get_user_model().objects.get_or_create(username="e2e-operator")
+    c.force_login(operator)
 
 
 

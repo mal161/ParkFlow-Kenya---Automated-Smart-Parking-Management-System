@@ -49,12 +49,11 @@ def request(method: str, path: str, payload=None, timeout: float = 5.0):
     """
     url = base_url() + path
     body = json.dumps(payload).encode('utf-8') if payload is not None else None
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method=method,
-        headers={'Content-Type': 'application/json'},
-    )
+    headers = {'Content-Type': 'application/json'}
+    api_key = getattr(settings, 'FLASK_API_KEY', '')
+    if api_key:
+        headers['X-API-Key'] = api_key
+    req = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode('utf-8')), resp.status

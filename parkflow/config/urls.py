@@ -12,6 +12,8 @@ from django.views.generic import RedirectView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    # login/ and logout/ (operator sign-in; see LoginRequiredMiddleware)
+    path('accounts/', include('django.contrib.auth.urls')),
     path('', RedirectView.as_view(pattern_name='dashboard:operator')),
     path('dashboard/', include('dashboard.urls')),
     path('parking/', include('parking.urls')),

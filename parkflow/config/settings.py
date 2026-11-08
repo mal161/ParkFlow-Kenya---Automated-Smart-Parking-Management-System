@@ -13,20 +13,40 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+from dotenv import load_dotenv
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load the project-root .env (same file the Flask engine reads), so
+# DJANGO_SECRET_KEY / DEBUG / ALLOWED_HOSTS / FLASK_API_KEY actually apply.
+load_dotenv(BASE_DIR.parent / '.env')
+
+
+def _env_flag(name, default='false'):
+    return os.environ.get(name, default).strip().lower() in ('1', 'true', 'yes')
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-dev-key-change-in-production')
-
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
+DEBUG = _env_flag('DEBUG', 'True')
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+# SECURITY WARNING: keep the secret key used in production secret!
+_INSECURE_DEV_KEY = 'django-insecure-dev-key-change-in-production'
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', _INSECURE_DEV_KEY)
+if not DEBUG and SECRET_KEY == _INSECURE_DEV_KEY:
+    raise ImproperlyConfigured(
+        'DJANGO_SECRET_KEY must be set when DEBUG is off.'
+    )
+
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    if host.strip()
+]
 
 
 # Application definition
@@ -52,6 +72,10 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # Every page and JSON endpoint requires a signed-in operator; the
+    # login view is exempt automatically. Without this anyone on the
+    # network could record exits/payments or read revenue reports.
+    'django.contrib.auth.middleware.LoginRequiredMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -131,15 +155,43 @@ STATICFILES_DIRS = [
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
+# Authentication (operator login)
+LOGIN_URL = 'login'
+LOGIN_REDIRECT_URL = 'dashboard:operator'
+LOGOUT_REDIRECT_URL = 'login'
+
+
 # Flask API Configuration
 FLASK_API_URL = os.environ.get('FLASK_API_URL', 'http://localhost:5001')
+# Shared secret sent as X-API-Key (must equal FLASK_API_KEY of the engine).
+FLASK_API_KEY = os.environ.get('FLASK_API_KEY', '')
+# Forward a client-chosen exit_time to the engine. Only for automated e2e
+# tests: in normal use it would let anyone back-date an exit to park free.
+ALLOW_EXIT_TIME_OVERRIDE = _env_flag('PARKFLOW_ALLOW_EXIT_TIME_OVERRIDE')
+
+
+# Security headers / cookies
+X_FRAME_OPTIONS = 'DENY'
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SESSION_COOKIE_HTTPONLY = True
+if not DEBUG:
+    # Production is expected to be served over HTTPS.
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_SSL_REDIRECT = _env_flag('SECURE_SSL_REDIRECT', 'True')
+    SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', '0'))
 
 
 # Email
-# https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
+
+# Logging: surface engine/mirror warnings on the console.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {'console': {'class': 'logging.StreamHandler'}},
+    'loggers': {
+        'common': {'handlers': ['console'], 'level': 'INFO'},
     },
 }

@@ -5,7 +5,8 @@ This module defines the Vehicle model for registration and tracking.
 """
 from django.db import models
 from django.core.validators import RegexValidator
-from django.utils import timezone
+
+from common.plates import normalize_registration
 
 
 class Vehicle(models.Model):
@@ -63,22 +64,10 @@ class Vehicle(models.Model):
         return f"{self.registration_number} ({self.vehicle_type})"
 
     def save(self, *args, **kwargs):
-        """Normalize registration number before saving."""
-        # Remove spaces and convert to uppercase
-        self.registration_number = self.registration_number.replace(' ', '').upper()
-        # Insert space after 3rd character for display: KAA123A -> KAA 123A
-        if len(self.registration_number) >= 4 and ' ' not in self.registration_number:
-            self.registration_number = (
-                self.registration_number[:3] + ' ' + self.registration_number[3:]
-            )
+        """Normalize registration number before saving (KAA123A -> KAA 123A)."""
+        self.registration_number = normalize_registration(self.registration_number)
         super().save(*args, **kwargs)
 
     def has_active_session(self) -> bool:
         """Check if this vehicle has an active parking session."""
-        return self.parking_sessions.filter(
-            status=ParkingSession.Status.ACTIVE
-        ).exists()
-
-
-# Import here to avoid circular import
-from parking.models import ParkingSession  # noqa: E402
+        return self.parking_sessions.filter(status='ACTIVE').exists()

@@ -7,18 +7,25 @@ export (format=csv) and the JSON report endpoints, so all three
 output formats always agree.
 """
 import csv
-
-from django.shortcuts import render
-from django.http import JsonResponse, HttpResponse
-from django.utils import timezone
-from django.db.models import Count, Sum, Avg
-from django.db.models.functions import TruncDate, Extract
 from datetime import timedelta
 
-from parking.models import ParkingSlot, ParkingSession, ParkingRate
-from vehicles.models import Vehicle
+from django.db.models import Avg, Count, Sum
+from django.db.models.functions import Extract, TruncDate
+from django.http import HttpResponse, JsonResponse
+from django.shortcuts import render
+from django.utils import timezone
+from django.views.decorators.http import require_GET
+
+from common.plates import normalize_registration
+from common.timeutils import local_day_bounds
+from parking.models import ParkingSession, ParkingSlot
 from payments.models import Payment
+from vehicles.models import Vehicle
+
 from .models import ReportLog
+
+# Bounds for the ?days= parameter (huge values overflow timedelta -> 500).
+MIN_DAYS, MAX_DAYS = 1, 365
 
 
 REPORT_TITLES = {
@@ -30,19 +37,28 @@ REPORT_TITLES = {
 }
 
 
-def _int_param(request, name, default):
-    """Read an integer query parameter, falling back to a default."""
+def _days_param(request, default):
+    """?days= as an integer clamped to [MIN_DAYS, MAX_DAYS]."""
     try:
-        return int(request.GET.get(name, default))
+        days = int(request.GET.get('days', default))
     except (TypeError, ValueError):
-        return default
+        days = default
+    return max(MIN_DAYS, min(MAX_DAYS, days))
+
+
+def _log(request, report_type, parameters):
+    """Audit-trail entry for a generated report."""
+    ReportLog.objects.create(
+        report_type=report_type,
+        parameters=parameters,
+        generated_by=request.user.get_username() if request.user.is_authenticated else '',
+    )
 
 
 def _build_daily_summary(request):
     """Build the daily summary dataset."""
-    today = timezone.now().date()
-    start_of_day = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.min.time()))
-    end_of_day = start_of_day + timedelta(days=1)
+    today = timezone.localdate()
+    start_of_day, end_of_day = local_day_bounds(today)
 
     # Sessions today
     sessions_today = ParkingSession.objects.filter(
@@ -95,18 +111,14 @@ def _build_daily_summary(request):
         'vehicle_type_breakdown': list(vehicle_types),
     }
 
-    # Log report
-    ReportLog.objects.create(
-        report_type=ReportLog.ReportType.DAILY_SUMMARY,
-        parameters={'date': today.isoformat()},
-    )
+    _log(request, ReportLog.ReportType.DAILY_SUMMARY, {'date': today.isoformat()})
 
     return data
 
 
 def _build_revenue(request):
     """Build the revenue report dataset for a date range."""
-    days = _int_param(request, 'days', 7)
+    days = _days_param(request, 7)
     end_date = timezone.now()
     start_date = end_date - timedelta(days=days)
 
@@ -136,17 +148,14 @@ def _build_revenue(request):
         'daily_breakdown': list(daily_revenue),
     }
 
-    ReportLog.objects.create(
-        report_type=ReportLog.ReportType.REVENUE,
-        parameters={'days': days},
-    )
+    _log(request, ReportLog.ReportType.REVENUE, {'days': days})
 
     return data
 
 
 def _build_occupancy(request):
     """Build the occupancy report dataset."""
-    days = _int_param(request, 'days', 7)
+    days = _days_param(request, 7)
     end_date = timezone.now()
     start_date = end_date - timedelta(days=days)
 
@@ -177,10 +186,7 @@ def _build_occupancy(request):
         'peak_hours': list(peak_hourly),
     }
 
-    ReportLog.objects.create(
-        report_type=ReportLog.ReportType.OCCUPANCY,
-        parameters={'days': days},
-    )
+    _log(request, ReportLog.ReportType.OCCUPANCY, {'days': days})
 
     return data
 
@@ -191,25 +197,26 @@ def _build_vehicle_history(request):
 
     Returns (data, error): exactly one of the two is set.
     """
-    reg_number = request.GET.get('registration_number', '').strip().upper()
+    reg_number = normalize_registration(request.GET.get('registration_number', ''))
 
     if not reg_number:
         return None, 'registration_number is required'
-
-    reg_clean = reg_number.replace(' ', '')
-    if len(reg_clean) >= 4:
-        reg_number = reg_clean[:3] + ' ' + reg_clean[3:]
 
     vehicle = Vehicle.objects.filter(registration_number=reg_number).first()
 
     if not vehicle:
         return None, 'Vehicle not found'
 
-    sessions = vehicle.parking_sessions.all().order_by('-entry_time')
+    sessions = vehicle.parking_sessions.select_related('slot').order_by('-entry_time')
 
     total_sessions = sessions.count()
     completed_sessions = sessions.filter(status=ParkingSession.Status.COMPLETED).count()
-    total_paid = sessions.aggregate(Sum('amount_due'))['amount_due__sum'] or 0
+    # Money actually received (not amount_due, which also counts unpaid
+    # sessions still waiting at the barrier).
+    total_paid = Payment.objects.filter(
+        session__vehicle=vehicle,
+        payment_status=Payment.PaymentStatus.PAID,
+    ).aggregate(total=Sum('amount'))['total'] or 0
     avg_duration = sessions.filter(
         status=ParkingSession.Status.COMPLETED
     ).aggregate(Avg('duration_minutes'))['duration_minutes__avg'] or 0
@@ -235,17 +242,14 @@ def _build_vehicle_history(request):
         'sessions': session_data,
     }
 
-    ReportLog.objects.create(
-        report_type=ReportLog.ReportType.VEHICLE_HISTORY,
-        parameters={'registration_number': reg_number},
-    )
+    _log(request, ReportLog.ReportType.VEHICLE_HISTORY, {'registration_number': reg_number})
 
     return data, None
 
 
 def _build_payment_summary(request):
     """Build the payment summary dataset."""
-    days = _int_param(request, 'days', 30)
+    days = _days_param(request, 30)
     end_date = timezone.now()
     start_date = end_date - timedelta(days=days)
 
@@ -277,10 +281,7 @@ def _build_payment_summary(request):
         'by_method': list(by_method),
     }
 
-    ReportLog.objects.create(
-        report_type=ReportLog.ReportType.PAYMENT_SUMMARY,
-        parameters={'days': days},
-    )
+    _log(request, ReportLog.ReportType.PAYMENT_SUMMARY, {'days': days})
 
     return data
 
@@ -295,13 +296,36 @@ BUILDERS = {
 }
 
 
+class _SafeCSVWriter:
+    """
+    csv.writer wrapper that neutralises spreadsheet formulas.
+
+    A cell starting with = + - @ (or tab/CR) is evaluated by Excel/Sheets
+    when the CSV is opened ("CSV injection"); prefixing a quote makes it
+    plain text. Numbers are left untouched.
+    """
+
+    _TRIGGERS = ('=', '+', '-', '@', '\t', '\r')
+
+    def __init__(self, stream):
+        self._writer = csv.writer(stream)
+
+    def _clean(self, value):
+        if isinstance(value, str) and value.startswith(self._TRIGGERS):
+            return "'" + value
+        return value
+
+    def writerow(self, row):
+        self._writer.writerow([self._clean(value) for value in row])
+
+
 def _csv_response(report_type, data, request):
     """Stream a report dataset as a CSV attachment."""
     response = HttpResponse(content_type='text/csv')
     response['Content-Disposition'] = (
         f'attachment; filename="parkflow-{report_type}-{timezone.localdate()}.csv"'
     )
-    writer = csv.writer(response)
+    writer = _SafeCSVWriter(response)
 
     if report_type == 'daily':
         writer.writerow(['Metric', 'Value'])
@@ -377,6 +401,7 @@ def _csv_response(report_type, data, request):
     return response
 
 
+@require_GET
 def reports_dashboard(request):
     """
     Reports page: a plain GET form picks the report type, the dataset
@@ -414,21 +439,25 @@ def reports_dashboard(request):
     return render(request, 'reports/dashboard.html', context)
 
 
+@require_GET
 def daily_summary(request):
     """JSON endpoint: daily summary report."""
     return JsonResponse({'success': True, 'data': _build_daily_summary(request)})
 
 
+@require_GET
 def revenue_report(request):
     """JSON endpoint: revenue report for a date range."""
     return JsonResponse({'success': True, 'data': _build_revenue(request)})
 
 
+@require_GET
 def occupancy_report(request):
     """JSON endpoint: occupancy report."""
     return JsonResponse({'success': True, 'data': _build_occupancy(request)})
 
 
+@require_GET
 def vehicle_history_report(request):
     """JSON endpoint: vehicle history report."""
     data, error = _build_vehicle_history(request)
@@ -440,6 +469,7 @@ def vehicle_history_report(request):
     return JsonResponse({'success': True, 'data': data})
 
 
+@require_GET
 def payment_summary_report(request):
     """JSON endpoint: payment summary report."""
     return JsonResponse({'success': True, 'data': _build_payment_summary(request)})

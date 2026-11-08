@@ -1,6 +1,6 @@
 -- ============================================================
 -- ParkFlow Kenya — Supabase PostgreSQL schema
--- Project: pjpqufjuaagnavlfdmew.supabase.co
+-- Project: your Supabase project (see SUPABASE_URL in .env)
 -- Run this file in: Supabase Dashboard → SQL Editor → New query
 -- Then run: Run (⌘/Ctrl + Enter)
 -- Idempotent: safe to run more than once.

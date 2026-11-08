@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+
+{% block title %}Sign in - ParkFlow Kenya{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 400px; margin: var(--spacing-xl) auto;">
+    <div class="card-header">
+        <h3>Operator sign in</h3>
+    </div>
+    <div class="card-body">
+        {% if form.errors %}
+        <div class="alert alert-error">Incorrect username or password.</div>
+        {% endif %}
+        <form method="post" action="{% url 'login' %}">
+            {% csrf_token %}
+            <div class="form-group">
+                <label for="id_username">Username</label>
+                <input type="text" name="username" id="id_username" autocomplete="username" required autofocus>
+            </div>
+            <div class="form-group">
+                <label for="id_password">Password</label>
+                <input type="password" name="password" id="id_password" autocomplete="current-password" required>
+            </div>
+            <input type="hidden" name="next" value="{{ next }}">
+            <button type="submit" class="btn btn-primary" style="width: 100%;">Sign in</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

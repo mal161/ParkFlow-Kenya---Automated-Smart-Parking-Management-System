@@ -3,9 +3,6 @@
  * Common utilities and shared functionality
  */
 
-// API base URL
-const API_BASE = '';
-
 // Utility functions
 const ParkFlow = {
     /**
@@ -32,19 +29,51 @@ const ParkFlow = {
             },
         };
 
+        let response;
         try {
-            const response = await fetch(url, mergedOptions);
-            const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.message || `HTTP ${response.status}`);
-            }
-
-            return data;
+            response = await fetch(url, mergedOptions);
         } catch (error) {
-            console.error('API Error:', error);
-            throw error;
+            console.error('Network error:', error);
+            throw new Error('Network error - check your connection and retry.');
         }
+
+        // Session expired: the login middleware redirected to an HTML page.
+        if (response.redirected && new URL(response.url).pathname.startsWith('/accounts/login')) {
+            window.location.href = response.url;
+            throw new Error('Your session has expired. Please sign in again.');
+        }
+
+        const isJson = (response.headers.get('Content-Type') || '').includes('application/json');
+        if (!isJson) {
+            throw new Error(`Unexpected server response (HTTP ${response.status})`);
+        }
+        const data = await response.json();
+
+        // Business failures (e.g. "parking full") come back as JSON with
+        // success=false; hand them to the caller instead of throwing.
+        if (!response.ok && data.success === undefined) {
+            throw new Error(data.message || `HTTP ${response.status}`);
+        }
+        return data;
+    },
+
+    /**
+     * Render label/value rows into a container safely (textContent only).
+     * @param {HTMLElement} container - Target element (emptied first)
+     * @param {Array<[string, string]>} rows - [label, value] pairs
+     */
+    renderDetails(container, rows) {
+        const grid = document.createElement('div');
+        grid.className = 'detail-grid';
+        grid.style.cssText = 'display: grid; grid-template-columns: 1fr 1fr; gap: var(--spacing-sm); margin-bottom: var(--spacing-md);';
+        for (const [label, value] of rows) {
+            const cell = document.createElement('div');
+            const strong = document.createElement('strong');
+            strong.textContent = `${label}: `;
+            cell.append(strong, document.createTextNode(String(value ?? '')));
+            grid.appendChild(cell);
+        }
+        container.replaceChildren(grid);
     },
 
     /**
@@ -137,16 +166,6 @@ const ParkFlow = {
             return clean.slice(0, 3) + ' ' + clean.slice(3);
         }
         return clean;
-    },
-
-    /**
-     * Validate Kenyan registration number format
-     * @param {string} reg - Registration number
-     * @returns {boolean} Whether valid
-     */
-    validateRegistration(reg) {
-        const clean = reg.replace(/\s+/g, '').toUpperCase();
-        return /^K[A-Z]{2}\d{1,3}[A-Z]?$/.test(clean);
     },
 };
 

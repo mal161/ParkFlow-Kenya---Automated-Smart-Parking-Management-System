@@ -1,0 +1,210 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Receipt {{ payment.transaction_reference }} - ParkFlow Kenya{% endblock %}
+
+{% block content %}
+<div class="receipt-actions">
+    <a href="{% url 'payments:list' %}" class="btn btn-secondary">Back to Payments</a>
+    <button class="btn btn-primary" onclick="window.print()">Print Receipt</button>
+</div>
+
+<div class="receipt">
+    <div class="receipt-header">
+        <img class="receipt-logo" src="{% static 'images/logo.svg' %}" alt="ParkFlow Kenya">
+        <div>
+            <div class="receipt-brand">ParkFlow Kenya</div>
+            <div class="receipt-sub">Automated Parking Management System</div>
+        </div>
+    </div>
+
+    <div class="receipt-title">
+        <h2>PARKING RECEIPT</h2>
+        <span class="badge badge-{{ payment.payment_status|lower }}">{{ payment.payment_status }}</span>
+    </div>
+
+    <div class="receipt-meta">
+        <div>
+            <span>Receipt No</span>
+            <strong>{{ payment.transaction_reference }}</strong>
+        </div>
+        <div>
+            <span>Date</span>
+            <strong>{{ payment.payment_time|date:"M d, Y H:i" }}</strong>
+        </div>
+    </div>
+
+    <table class="receipt-table">
+        <tbody>
+            <tr>
+                <td>Vehicle</td>
+                <td>{{ payment.session.vehicle }}</td>
+            </tr>
+            <tr>
+                <td>Slot</td>
+                <td>{{ payment.session.slot.slot_number }} ({{ payment.session.slot.location|default:'General' }})</td>
+            </tr>
+            <tr>
+                <td>Entry Time</td>
+                <td>{{ payment.session.entry_time|date:"M d, Y H:i" }}</td>
+            </tr>
+            <tr>
+                <td>Exit Time</td>
+                <td>{{ payment.session.exit_time|date:"M d, Y H:i"|default:'-' }}</td>
+            </tr>
+            <tr>
+                <td>Duration</td>
+                <td>{{ payment.session.duration_minutes }} min</td>
+            </tr>
+            <tr>
+                <td>Payment Method</td>
+                <td>{{ payment.get_payment_method_display }}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="receipt-total">
+        <span>Total Paid</span>
+        <strong>KSh {{ payment.amount|floatformat:2 }}</strong>
+    </div>
+
+    <div class="receipt-footer">
+        <p>Thank you for parking with ParkFlow Kenya.</p>
+        <p class="text-muted">Computer-generated receipt - keep it for your records.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+.receipt-actions {
+    display: flex;
+    gap: var(--spacing-md);
+    justify-content: flex-end;
+    margin-bottom: var(--spacing-lg);
+}
+
+.receipt {
+    max-width: 640px;
+    margin: 0 auto;
+    background: #ffffff;
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-lg);
+    padding: var(--spacing-xl);
+}
+
+.receipt-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding-bottom: var(--spacing-md);
+    border-bottom: 2px dashed var(--color-border);
+}
+
+.receipt-logo {
+    height: 52px;
+    width: auto;
+}
+
+.receipt-brand {
+    font-size: var(--font-size-xl);
+    font-weight: 700;
+    color: var(--color-primary);
+}
+
+.receipt-sub {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.receipt-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--spacing-lg);
+}
+
+.receipt-title h2 {
+    margin: 0;
+    font-size: var(--font-size-lg);
+    letter-spacing: 0.08em;
+}
+
+.receipt-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-md);
+    margin: var(--spacing-md) 0;
+    padding: var(--spacing-md);
+    background: var(--color-surface);
+    border-radius: var(--border-radius);
+}
+
+.receipt-meta span {
+    display: block;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.receipt-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: var(--spacing-sm);
+}
+
+.receipt-table td {
+    padding: var(--spacing-sm) var(--spacing-xs);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.receipt-table td:first-child {
+    color: var(--color-text-secondary);
+    width: 40%;
+}
+
+.receipt-total {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: var(--spacing-lg);
+    padding: var(--spacing-md);
+    background: var(--color-surface);
+    border-radius: var(--border-radius);
+    font-size: var(--font-size-lg);
+}
+
+.receipt-total strong {
+    color: var(--color-primary);
+    font-size: var(--font-size-xl);
+}
+
+.receipt-footer {
+    margin-top: var(--spacing-lg);
+    text-align: center;
+}
+
+.receipt-footer p {
+    margin: var(--spacing-xs) 0;
+}
+
+@media print {
+    .site-header,
+    .site-footer,
+    .receipt-actions,
+    .messages,
+    .main-nav {
+        display: none !important;
+    }
+
+    .main-content {
+        padding: 0;
+    }
+
+    .receipt {
+        max-width: none;
+        border: none;
+        padding: 0;
+    }
+}
+</style>
+{% endblock %}

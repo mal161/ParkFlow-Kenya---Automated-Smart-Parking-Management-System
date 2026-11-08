@@ -11,4 +11,5 @@ urlpatterns = [
     path('calculate-fee/', views.calculate_fee, name='calculate_fee'),
     path('process/', views.process_payment, name='process'),
     path('session/<int:session_id>/history/', views.payment_history, name='history'),
+    path('<int:payment_id>/receipt/', views.payment_receipt, name='receipt'),
 ]

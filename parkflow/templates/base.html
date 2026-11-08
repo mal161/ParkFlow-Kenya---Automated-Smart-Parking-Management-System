@@ -18,6 +18,7 @@
                     <p class="tagline">Automated Parking Management System</p>
                 </div>
             </div>
+            {% if user.is_authenticated %}
             <nav class="main-nav">
                 <ul>
                     <li><a href="{% url 'dashboard:operator' %}" class="{% if request.resolver_match.url_name == 'operator' %}active{% endif %}">Dashboard</a></li>
@@ -25,9 +26,18 @@
                     <li><a href="{% url 'vehicles:list' %}" class="{% if request.resolver_match.app_name == 'vehicles' %}active{% endif %}">Vehicles</a></li>
                     <li><a href="{% url 'payments:list' %}" class="{% if request.resolver_match.app_name == 'payments' %}active{% endif %}">Payments</a></li>
                     <li><a href="{% url 'reports:dashboard' %}" class="{% if request.resolver_match.app_name == 'reports' %}active{% endif %}">Reports</a></li>
-                    <li><a href="/admin/" class="{% if '/admin' in request.path %}active{% endif %}">Admin</a></li>
+                    {% if user.is_staff %}
+                    <li><a href="{% url 'admin:index' %}">Admin</a></li>
+                    {% endif %}
+                    <li>
+                        <form method="post" action="{% url 'logout' %}" style="display: inline;">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-sm btn-secondary" title="Signed in as {{ user.get_username }}">Sign out</button>
+                        </form>
+                    </li>
                 </ul>
             </nav>
+            {% endif %}
         </div>
     </header>
 

@@ -15,6 +15,7 @@ Persistence model:
 
 import os
 import logging
+import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
@@ -24,18 +25,15 @@ from flask_api.data_structures import (
     ParkingSlot,
     Vehicle,
     ParkingSession,
-    Payment,
     ParkingSlotRegistry,
     VehicleRegistry,
     WaitingQueue,
     SessionIndex,
-    SlotStatus,
     SessionStatus,
-    PaymentStatus,
 )
 from flask_api.algorithms import (
-    FeeStructure,
     DEFAULT_FEE_STRUCTURES,
+    VALID_VEHICLE_TYPES,
     calculate_parking_fee,
     calculate_duration_minutes,
     FirstFitAllocation,
@@ -43,12 +41,10 @@ from flask_api.algorithms import (
     process_vehicle_exit,
     process_payment,
     check_availability,
-    authorize_exit_barrier,
     EntryResult,
     ExitResult,
     PaymentResult,
     AvailabilityInfo,
-    BarrierState,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,6 +95,12 @@ class ParkingService:
         self.allocation_strategy = FirstFitAllocation()
         self.persistence_enabled = False
         self._initialized = False
+        # Serialises every workflow mutation. The Flask server is threaded,
+        # and entry/exit/payment are multi-step (check -> allocate ->
+        # persist -> roll back on failure): without one service-wide lock
+        # two concurrent requests could, for example, both pass the
+        # duplicate-entry check or interleave their _sync() writes.
+        self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Initialization
@@ -305,10 +307,12 @@ class ParkingService:
         Returns:
             Human-readable message ('' when the queue was empty).
         """
-        next_vehicle = self.waiting_queue.dequeue()
-        if not next_vehicle:
+        if self.waiting_queue.is_empty():
             return ""
+        if not self.slot_registry.get_available_slots():
+            return " Parking still full."
 
+        next_vehicle = self.waiting_queue.dequeue()
         result = self.enter_vehicle(
             next_vehicle['registration_number'],
             next_vehicle['vehicle_type'],
@@ -319,11 +323,10 @@ class ParkingService:
                 f"allocated slot {result.slot.slot_number}."
             )
 
-        # Could not allocate (or persistence failed) - keep it queued.
-        self.waiting_queue.enqueue(
-            next_vehicle['registration_number'], next_vehicle['vehicle_type']
-        )
-        return " Parking still full."
+        # Persistence failed: put the vehicle back at the HEAD of the queue
+        # so it does not lose its turn to vehicles that arrived later.
+        self.waiting_queue.enqueue_front(next_vehicle)
+        return " Waiting vehicle could not be allocated; it stays first in the queue."
 
     # ------------------------------------------------------------------
     # Workflow operations
@@ -333,6 +336,11 @@ class ParkingService:
         return check_availability(self.slot_registry)
 
     def enter_vehicle(self, registration_number: str, vehicle_type: str = "CAR") -> EntryResult:
+        """Thread-safe entry point (workflow in _enter_vehicle_locked)."""
+        with self._lock:
+            return self._enter_vehicle_locked(registration_number, vehicle_type)
+
+    def _enter_vehicle_locked(self, registration_number: str, vehicle_type: str = "CAR") -> EntryResult:
         """
         Process vehicle entry and persist the new session.
 
@@ -381,11 +389,16 @@ class ParkingService:
             )
             return EntryResult(
                 success=False,
-                message=f"Database error recording entry: {exc}",
+                message="Database error recording entry. Check the engine log.",
             )
         return result
 
     def exit_vehicle(self, registration_number: str, exit_time: Optional[datetime] = None) -> ExitResult:
+        """Thread-safe entry point (workflow in _exit_vehicle_locked)."""
+        with self._lock:
+            return self._exit_vehicle_locked(registration_number, exit_time)
+
+    def _exit_vehicle_locked(self, registration_number: str, exit_time: Optional[datetime] = None) -> ExitResult:
         """
         Process vehicle exit: record exit time, duration and fee.
 
@@ -425,7 +438,7 @@ class ParkingService:
             )
             return ExitResult(
                 success=False,
-                message=f"Database error recording exit: {exc}",
+                message="Database error recording exit. Check the engine log.",
             )
 
         # Free parking: no payment step. Release the slot and complete the
@@ -448,7 +461,7 @@ class ParkingService:
                 )
                 return ExitResult(
                     success=False,
-                    message=f"Database error completing free exit: {exc}",
+                    message="Database error completing free exit. Check the engine log.",
                 )
             queued_message = self._serve_waiting_queue()
             result.message = f"Free parking (KSh 0). Exit authorized.{queued_message}"
@@ -470,31 +483,60 @@ class ParkingService:
             raise ValueError(f"Session {session_id} not found")
 
         if duration_override is not None:
+            if duration_override < 0:
+                raise ValueError("duration_minutes must be >= 0")
             duration = duration_override
         else:
             duration = calculate_duration_minutes(session.entry_time, session.exit_time)
 
-        vehicle = self.vehicle_registry.get_vehicle(session.vehicle_id)
-        vehicle_type = vehicle.vehicle_type if vehicle else "CAR"
-
-        fee = calculate_parking_fee(vehicle_type, duration)
+        vehicle_type = self._vehicle_type(session.vehicle_id)
         fee_structure = DEFAULT_FEE_STRUCTURES.get(vehicle_type, DEFAULT_FEE_STRUCTURES['CAR'])
 
         return {
             'session_id': session_id,
+            'vehicle': f'{session.vehicle_id} ({vehicle_type})',
             'vehicle_type': vehicle_type,
             'duration_minutes': duration,
-            'fee_ksh': fee,
-            'rate_used': {
-                'free_minutes': fee_structure.free_minutes,
-                'two_hour_rate': fee_structure.two_hour_rate,
-                'four_hour_rate': fee_structure.four_hour_rate,
-                'six_hour_rate': fee_structure.six_hour_rate,
-                'over_six_hour_rate': fee_structure.over_six_hour_rate,
-            }
+            'fee_ksh': calculate_parking_fee(vehicle_type, duration),
+            'rate_used': fee_structure.to_dict(),
         }
 
+    def register_vehicle(self, registration_number: str, vehicle_type: str = "CAR") -> Optional[Vehicle]:
+        """
+        Register a vehicle (master data) without parking it.
+
+        Persists first, so a failed database write changes nothing in
+        memory. Returns the new Vehicle, or None if already registered.
+
+        Raises:
+            ValueError: unknown vehicle type
+            PersistenceError: the database write failed
+        """
+        vehicle_type = vehicle_type.upper()
+        if vehicle_type not in VALID_VEHICLE_TYPES:
+            raise ValueError(
+                "Invalid vehicle type. Must be one of: "
+                + ", ".join(VALID_VEHICLE_TYPES)
+            )
+        norm_reg = VehicleRegistry.normalize_registration(registration_number)
+        with self._lock:
+            if self.vehicle_registry.vehicle_exists(norm_reg):
+                return None
+            if self.persistence_enabled:
+                try:
+                    get_supabase_service().get_or_create_vehicle(norm_reg, vehicle_type)
+                except _DB_ERRORS as exc:
+                    raise PersistenceError(str(exc)) from exc
+            vehicle = Vehicle(registration_number=norm_reg, vehicle_type=vehicle_type)
+            self.vehicle_registry.register_vehicle(vehicle)
+            return vehicle
+
     def process_payment(self, session_id: int, amount: int, payment_method: str = "CASH", transaction_reference: Optional[str] = None) -> PaymentResult:
+        """Thread-safe entry point (workflow in _process_payment_locked)."""
+        with self._lock:
+            return self._process_payment_locked(session_id, amount, payment_method, transaction_reference)
+
+    def _process_payment_locked(self, session_id: int, amount: int, payment_method: str = "CASH", transaction_reference: Optional[str] = None) -> PaymentResult:
         """
         Process payment for a session, then release the slot, complete
         the session and serve the waiting queue (required exit workflow).
@@ -539,7 +581,7 @@ class ParkingService:
             logger.error("Payment pre-sync failed for session %s: %s", session_id, exc)
             return PaymentResult(
                 success=False,
-                message=f"Database error: {exc}",
+                message="Database error preparing payment. Check the engine log.",
             )
 
         # 1. Insert the cash payment row.
@@ -554,13 +596,15 @@ class ParkingService:
                     payment.payment_time,
                 )
                 payment.db_id = row['id']
+                # Expose the database id so API ids match stored rows.
+                payment.payment_id = row['id']
             except _DB_ERRORS as exc:
                 logger.error(
                     "Payment insert failed for session %s: %s", session_id, exc
                 )
                 return PaymentResult(
                     success=False,
-                    message=f"Database error recording payment: {exc}",
+                    message="Database error recording payment. Check the engine log.",
                 )
 
         # 2. Release the slot and complete the session in memory.
@@ -594,17 +638,13 @@ class ParkingService:
             )
             return PaymentResult(
                 success=False,
-                message=f"Database error completing session: {exc}",
+                message="Database error completing session. Check the engine log.",
             )
 
         # 4. Serve the FIFO queue with the freed slot.
         queued_message = self._serve_waiting_queue()
         result.message = f"Payment recorded. Exit authorized.{queued_message}"
         return result
-
-    def authorize_exit(self, payment_successful: bool, session_completed: bool) -> BarrierState:
-        """Authorize exit barrier."""
-        return authorize_exit_barrier(payment_successful, session_completed)
 
     # ------------------------------------------------------------------
     # Read helpers
@@ -648,12 +688,9 @@ class ParkingService:
     def get_slot_grid(self) -> Dict[str, List[Dict[str, Any]]]:
         """Get slots grouped by location for display."""
         slots = self.slot_registry.get_all_slots()
-        locations = {}
-        for slot in slots:
-            loc = slot.location or 'General'
-            if loc not in locations:
-                locations[loc] = []
-            locations[loc].append({
+        locations: Dict[str, List[Dict[str, Any]]] = {}
+        for slot in sorted(slots, key=lambda s: s.slot_number):
+            locations.setdefault(slot.location or 'General', []).append({
                 'slot_number': slot.slot_number,
                 'status': slot.status.value,
             })
